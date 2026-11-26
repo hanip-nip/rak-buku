@@ -58,6 +58,7 @@ export async function writeJson(token, folderId, name, obj, existingId) {
 }
 
 export async function startUpload(token, folderId, name, size) {
+  if (!size) throw new Error('File kosong');
   const res = await call(`${UPLOAD}/files?uploadType=resumable`, token, {
     method: 'POST',
     body: JSON.stringify({ name, parents: [folderId], mimeType: 'application/pdf' }),
@@ -81,6 +82,7 @@ async function sessionResult(res) {
 }
 
 export async function uploadChunk(sessionUrl, blob, start) {
+  // URL sesi sudah membawa otorisasi: tanpa Bearer.
   const end = Math.min(start + CHUNK, blob.size) - 1;
   const res = await fetch(sessionUrl, {
     method: 'PUT',

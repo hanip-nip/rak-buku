@@ -163,3 +163,22 @@ test('uploadOffset 404 melempar dengan status 404', async () => {
   stub(() => new Response('', { status: 404 }));
   await assert.rejects(drive.uploadOffset('u', 10), (e) => e.status === 404);
 });
+
+test('fetch yang selesai setelah logout() tidak mengisi ulang cache', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  stub(async () => { await gate; return json({ access_token: 'OLD', expires_in: 3600 }); });
+  const p = auth.getToken(0);
+  await new Promise((r) => setImmediate(r));
+  await auth.logout();
+  release();
+  await p;
+  blob = 'sealed';
+  stub(() => json({ access_token: 'NEW', expires_in: 3600 }));
+  assert.equal(await auth.getToken(0), 'NEW');
+});
+
+test('upload 0 byte ditolak', async () => {
+  stub(() => assert.fail('tak boleh fetch'));
+  await assert.rejects(drive.startUpload('TK', 'F', 'a.pdf', 0), /kosong/);
+});

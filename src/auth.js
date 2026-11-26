@@ -10,7 +10,8 @@ export const deps = { getAuth: store.getAuth, setAuth: store.setAuth };
 
 let cache = null; // {token, exp}
 let inflight = null;
-export const _reset = () => { cache = null; inflight = null; };
+let gen = 0; // naik tiap cache dibuang; fetch lama tak boleh mengisi cache lagi
+export const _reset = () => { gen++; cache = null; inflight = null; };
 
 export const login = () => { location.href = `${WORKER_URL}/login`; };
 export const isLoggedIn = async () => (await deps.getAuth()) != null;
@@ -24,12 +25,14 @@ export async function takeAuthFromHash() {
   try { val = decodeURIComponent(m[2]); } catch { val = null; }
   if (m[1] === 'auth' && val) {
     await deps.setAuth(val);
+    _reset();
     return { taken: true };
   }
   return { taken: false, error: val ?? 'data tidak valid' };
 }
 
 async function fetchToken(now) {
+  const g = gen;
   const blob = await deps.getAuth();
   if (!blob) throw new ReloginError();
   const res = await fetch(`${WORKER_URL}/token`, {
@@ -39,16 +42,18 @@ async function fetchToken(now) {
   });
   if (res.status === 401) {
     await deps.setAuth(null);
-    cache = null;
+    _reset();
     throw new ReloginError();
   }
   if (!res.ok) throw Object.assign(new Error(`token ${res.status}`), { status: res.status });
   const { access_token, expires_in } = await res.json();
-  cache = { token: access_token, exp: now + expires_in * 1000 };
+  if (g === gen) cache = { token: access_token, exp: now + expires_in * 1000 };
   return access_token;
 }
 
 export function getToken(now = Date.now()) {
   if (cache && cache.exp - now > 60_000) return Promise.resolve(cache.token);
-  return (inflight ??= fetchToken(now).finally(() => { inflight = null; }));
+  if (inflight) return inflight;
+  const p = fetchToken(now).finally(() => { if (inflight === p) inflight = null; });
+  return (inflight = p);
 }
