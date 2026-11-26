@@ -6,8 +6,12 @@ const upsertById = (list, rec) => (list.some((x) => x.id === rec.id)
   ? list.map((x) => (x.id === rec.id ? rec : x))
   : [...list, rec]);
 
-export const upsertSeries = (own, series, now) =>
-  ({ ...own, series: upsertById(own.series, { ...series, updatedAt: now }) });
+// Tombstone file milik salinan lama dibawa terus, supaya salinan basi di perangkat lain tidak menghidupkannya lagi.
+export const upsertSeries = (own, series, now) => {
+  const old = own.series.find((s) => s.id === series.id);
+  const kept = (old?.files ?? []).filter((f) => f.deleted && !series.files.some((n) => n.id === f.id));
+  return { ...own, series: upsertById(own.series, { ...series, files: [...series.files, ...kept], updatedAt: now }) };
+};
 
 export const addFiles = (series, newFiles, now) => {
   const start = series.files.reduce((m, f) => Math.max(m, f.order), -1) + 1;

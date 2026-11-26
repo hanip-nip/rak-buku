@@ -63,3 +63,11 @@ test('merge: file dihapus tidak tampil', () => {
 
 test('merge: tidak ada status, rak kosong', () =>
   assert.deepEqual(mergeStates([], 'A'), { series: [], progress: {}, bookmarks: [] }));
+
+test('merge: order bentrok, urutan file sama dari sudut pandang perangkat mana pun', () => {
+  const A = dev('A', [s({ files: [f('z', 2), f('m', 2)] })]);
+  const B = dev('B', [s({ files: [f('b', 2)] })]);
+  const ids = (own) => mergeStates([A, B], own).series[0].files.map((x) => x.id);
+  assert.deepEqual(ids('A'), ['b', 'm', 'z']);
+  assert.deepEqual(ids('B'), ids('A'));
+});

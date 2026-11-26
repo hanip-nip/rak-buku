@@ -27,11 +27,11 @@ export function mergeStates(states, ownDeviceId) {
     const files = [...fileBest.get(id).values()]
       .filter(({ rec: f, own }) => !f.deleted && (f.driveId !== null || own))
       .map(({ rec: f }) => f)
-      .sort((a, b) => a.order - b.order);
+      .sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     series.push({ ...rec, files });
   }
   const alive = new Map(series.map((s) => [s.id, s]));
-  const orderOf = (sid, fileId) => alive.get(sid).files.find((f) => f.id === fileId)?.order ?? -1;
+  const orderOf = (sid, fileId) => alive.get(sid).files.findIndex((f) => f.id === fileId);
   const pos = (sid, p) => [orderOf(sid, p.fileId), p.page, p.offset];
 
   // Progres: updatedAt terbaru; sama -> posisi lebih jauh.

@@ -55,3 +55,18 @@ test('setProgress dan upsertBookmark', () => {
   assert.deepEqual([o4.bookmarks[0].deleted, o4.bookmarks[0].updatedAt], [true, 7]);
   assert.equal(o3.bookmarks[0].deleted, false);
 });
+
+test('upsertSeries membawa tombstone file lama', async () => {
+  const { mergeStates } = await import('../src/merge.js');
+  const live = (id) => ({ ...f(id, 0), driveId: 'D' + id });
+  const x = live('x');
+  const C = { ...newDeviceState('C', 'C'), series: [ser([x, live('y')])] };
+  let A = upsertSeries(newDeviceState('A', 'A'), ser([x, live('y')]), 1);
+  A = upsertSeries(A, ser([live('y')]), 5); // hapus x -> tombstone
+  A.series[0].files.push({ ...x, deleted: true, updatedAt: 5 });
+  const merged = mergeStates([A, C], 'A').series[0];
+  assert.deepEqual(merged.files.map((q) => q.id), ['y']);
+  A = upsertSeries(A, { ...merged, title: 'Baru' }, 8); // salinan gabungan, tanpa x
+  assert.ok(A.series[0].files.some((q) => q.id === 'x' && q.deleted));
+  assert.deepEqual(mergeStates([A, C], 'A').series[0].files.map((q) => q.id), ['y']);
+});
