@@ -4,10 +4,37 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('../vendor/pdf.worker.min.mjs',
 
 const MAX_PIXELS = 16777216; // batas kanvas iOS
 
+const FIRST_CHUNK = 65536;
+
+// Membaca Blob per rentang (tanpa memuat seluruh file ke memori).
+class BlobRangeTransport extends pdfjsLib.PDFDataRangeTransport {
+  constructor(blob, first, onError) {
+    super(blob.size, first);
+    this.blob = blob;
+    this.onError = onError;
+    this.aborted = false;
+  }
+
+  requestDataRange(begin, end) {
+    this.blob.slice(begin, end).arrayBuffer().then(
+      (buf) => { if (!this.aborted) this.onDataRange(begin, new Uint8Array(buf)); },
+      (err) => { if (!this.aborted) this.onError(err); },
+    );
+  }
+
+  // dipanggil pdf.js saat dokumen di-destroy: hentikan pembacaan yang masih tertunda
+  abort() { this.aborted = true; }
+}
+
 export async function openPdf(blob) {
-  const data = new Uint8Array(await blob.arrayBuffer());
+  const first = new Uint8Array(await blob.slice(0, FIRST_CHUNK).arrayBuffer());
+  let task;
+  // Gagal baca rentang: pdf.js tak punya jalur error di transport, jadi task di-destroy
+  // supaya promise yang menunggu ditolak, bukan menggantung diam-diam.
+  const transport = new BlobRangeTransport(blob, first, (err) => { console.error('Gagal membaca rentang PDF', err); task?.destroy(); });
   try {
-    return await pdfjsLib.getDocument({ data }).promise;
+    task = pdfjsLib.getDocument({ range: transport, length: blob.size, rangeChunkSize: FIRST_CHUNK * 4, disableAutoFetch: true, disableStream: true });
+    return await task.promise;
   } catch (e) {
     const why = e?.name === 'PasswordException' ? 'dilindungi kata sandi' : 'rusak atau bukan PDF';
     throw new Error(`PDF tidak bisa dibuka: ${why}`, { cause: e });
