@@ -7,12 +7,28 @@ const db = () => (dbp ??= new Promise((res, rej) => {
   r.onupgradeneeded = () => {
     for (const s of STORES) r.result.createObjectStore(s, s === 'outbox' ? { keyPath: 'id' } : undefined);
   };
-  r.onsuccess = () => res(r.result);
+  r.onsuccess = () => {
+    const d = r.result;
+    // iOS bisa menutup koneksi (suspend/versi baru): lupakan supaya pemanggil berikut membuka ulang.
+    d.onclose = d.onversionchange = () => { dbp = undefined; try { d.close(); } catch { /* sudah tertutup */ } };
+    res(d);
+  };
   r.onerror = () => { dbp = undefined; rej(r.error); };
 }));
 
+// Koneksi hilang (iOS: InvalidStateError atau "Connection to Indexed Database server lost") -> buka ulang, coba sekali lagi.
+// Transaksi yang gagal begitu sudah batal, jadi mengulang tidak menulis dua kali.
+const lost = (e) => e?.name === 'InvalidStateError' || /connection/i.test(e?.message ?? '');
+async function retry(fn) {
+  try { return await fn(); } catch (e) {
+    if (!lost(e)) throw e;
+    dbp = undefined;
+    return fn();
+  }
+}
+
 // Resolve only after the transaction commits, so a write is durable once the promise resolves.
-async function run(store, mode, fn) {
+const run = (store, mode, fn) => retry(async () => {
   const d = await db();
   return new Promise((res, rej) => {
     const tx = d.transaction(store, mode);
@@ -22,7 +38,7 @@ async function run(store, mode, fn) {
     tx.onerror = () => rej(tx.error ?? req?.error);
     tx.onabort = () => rej(tx.error ?? new Error('transaksi dibatalkan'));
   });
-}
+});
 const get = (s, k) => run(s, 'readonly', (o) => o.get(k));
 const put = (s, v, k) => run(s, 'readwrite', (o) => o.put(v, k));
 const del = (s, k) => run(s, 'readwrite', (o) => o.delete(k));
@@ -47,7 +63,7 @@ export async function getOwn() {
 }
 export const saveOwn = (s) => put('kv', s, 'own');
 // Baca-ubah-tulis 'own' dalam SATU transaksi readwrite: tidak terbelah suspend iOS, tidak menimpa penulis lain.
-export async function updateOwn(fn) {
+export const updateOwn = (fn) => retry(async () => {
   const id = await deviceId();
   const d = await db();
   return new Promise((res, rej) => {
@@ -62,7 +78,7 @@ export async function updateOwn(fn) {
     tx.onerror = () => rej(tx.error ?? req.error);
     tx.onabort = () => rej(tx.error ?? new Error('transaksi dibatalkan'));
   });
-}
+});
 export const getKv = (k) => get('kv', k);
 export const setKv = (k, v) => put('kv', v, k);
 export const getMerged = () => get('kv', 'merged');

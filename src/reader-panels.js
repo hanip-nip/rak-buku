@@ -7,12 +7,12 @@ const MISSING = 'belum di perangkat';
 const changed = () => window.dispatchEvent(new CustomEvent('rak:changed'));
 
 export function toc(s, api) {
-  const local = new Map(s.files.map((f) => [f.id, f]));
+  const local = new Map(s.run.map((f) => [f.id, f]));
   const go = (pos) => () => { close(); api.jump(pos); };
   const entries = (f) => f.outline.map((o) => h('button', { className: 'item', onclick: go({ fileId: f.id, page: o.page, offset: 0 }) }, o.title));
   let body;
   if (!s.multi) {
-    const f = s.files[0]; // seri satu file selalu sudah di-layout (kalau tidak, pembaca tidak terbuka)
+    const f = s.run[0]; // seri satu file selalu sudah di-layout (kalau tidak, pembaca tidak terbuka)
     body = f.outline.length ? entries(f) : [h('p', { className: 'muted' }, 'PDF ini tidak punya daftar isi')];
   } else {
     body = s.all.map((meta, i) => {
@@ -33,7 +33,7 @@ export function bookmarks(s, api) {
   const list = h('div', { className: 'bm-list' });
   const err = h('p', { className: 'muted' });
   const order = (id) => s.all.findIndex((f) => f.id === id);
-  const local = new Set(s.files.map((f) => f.id));
+  const local = new Set(s.run.map((f) => f.id));
 
   async function refresh() {
     const bms = (await load()).bookmarks

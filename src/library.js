@@ -82,6 +82,7 @@ async function posText(s, p) {
 async function localState(s) {
   const has = await Promise.all(s.files.map((f) => store.hasBlob(f.id)));
   const n = has.filter(Boolean).length;
+  if (!has.length) return 'Belum ada file';
   return n === has.length ? 'Ada di HP' : n === 0 ? 'Hanya di Drive' : 'Sebagian di HP';
 }
 
@@ -131,7 +132,11 @@ async function syncLine() {
   if (state === 'relogin') return els.sync.replaceChildren('Login ulang diperlukan · ', masuk);
   if (state === 'offline') return els.sync.replaceChildren('Offline — perubahan disimpan di HP');
   if (state === 'error') return els.sync.replaceChildren('Sinkron gagal, dicoba lagi nanti');
-  if (state === 'syncing') return els.sync.replaceChildren(`Menyinkronkan…${detail.total ? ` (mengunggah ${detail.done + 1}/${detail.total})` : ''}`);
+  if (state === 'syncing') {
+    const what = detail.fileId && detail.size ? ` (men-download ${Math.floor((detail.got / detail.size) * 100)}%)`
+      : detail.total ? ` (mengunggah ${detail.done + 1}/${detail.total})` : '';
+    return els.sync.replaceChildren(`Menyinkronkan…${what}`);
+  }
   const my = syncSt;
   const at = await store.getKv('lastSync').catch(() => null);
   if (my === syncSt) els.sync.replaceChildren(at ? `Tersinkron ${Math.max(0, Math.round((Date.now() - at) / 60000))} menit lalu` : '');
@@ -180,7 +185,9 @@ async function addDialog(files) {
     const ok = [], bad = [];
     let cover = '', full = '';
     const undo = (id) => Promise.allSettled([store.deleteBlob(id), store.deleteMeta(id)]);
+    const cancelled = () => !status.isConnected; // "Batal" / ketuk latar menutup sheet saat memproses
     for (const [i, file] of files.entries()) { // berurutan, hemat memori iPhone
+      if (cancelled()) break;
       const label = `Memproses ${i + 1}/${files.length}`;
       status.textContent = `${label}…`;
       let doc;
@@ -200,6 +207,7 @@ async function addDialog(files) {
         ok.push({ id, name: file.name, size: file.size, pages: doc.numPages });
       } finally { doc.destroy?.(); }
     }
+    if (cancelled()) { await Promise.all(ok.map((f) => undo(f.id))); return; } // batal: tidak ada yang ditambahkan
     close();
     let failed = '';
     if (ok.length) {
@@ -286,7 +294,7 @@ async function orderDialog(seriesId) {
 }
 
 async function delSeries(s, close) {
-  if (!confirm(`Hapus seri "${s.title}"? File di perangkat dan di Drive ikut dihapus.`)) return;
+  if (!confirm(`Hapus seri "${s.title}"? File di perangkat ikut dihapus, dan file di Drive dipindah ke Trash Drive.`)) return;
   close();
   const cur = await fresh(s.id);
   if (!cur) return;

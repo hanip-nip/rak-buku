@@ -41,3 +41,15 @@ export function visibleRange(layout, scrollTop, viewportH, extra = 2) {
   const e = floorIdx(layout.tops, scrollTop + viewportH);
   return [Math.max(0, s - extra), Math.min(n - 1, e + extra)];
 }
+
+// R19: jendela file yang di-layout, [lo, hi) dalam indeks seri. files = rentang lokal (files[0] = indeks runLo).
+// Coba cur−1…cur+2, lalu cur…cur+1, lalu cur saja, supaya tinggi total tidak melewati limitPx (batas layout browser).
+export function windowRun(files, runLo, runHi, cur, heightOf, limitPx) {
+  for (const [a, b] of [[1, 2], [0, 1]]) {
+    const lo = Math.max(runLo, cur - a), hi = Math.min(runHi, cur + b + 1);
+    let sum = 0;
+    for (let i = lo; i < hi; i++) sum += heightOf(files[i - runLo]);
+    if (sum <= limitPx) return [lo, hi];
+  }
+  return [cur, cur + 1];
+}

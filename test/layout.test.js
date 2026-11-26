@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLayout, positionAt, scrollTopFor, visibleRange } from '../src/layout.js';
+import { buildLayout, positionAt, scrollTopFor, visibleRange, windowRun } from '../src/layout.js';
 
 const L = buildLayout([{ fileId: 'a', page: 1, height: 1000 }, { fileId: 'a', page: 2, height: 500 }, { fileId: 'b', page: 1, height: 1000 }], 10);
 
@@ -28,4 +28,18 @@ test('visibleRange menambah 2 halaman di atas dan bawah', () => assert.deepEqual
 test('visibleRange dijepit di tepi', () => {
   assert.deepEqual(visibleRange(M, 0, 100), [0, 3]);
   assert.deepEqual(visibleRange(M, 900, 100), [7, 9]);
+});
+
+const run = Array.from({ length: 10 }, () => ({ h: 10 }));
+const hOf = (f) => f.h;
+test('windowRun: cur−1…cur+2 dijepit ke rentang lokal', () => {
+  assert.deepEqual(windowRun(run, 0, 10, 5, hOf, 100), [4, 8]);
+  assert.deepEqual(windowRun(run, 0, 10, 0, hOf, 100), [0, 3]);
+  assert.deepEqual(windowRun(run, 0, 10, 9, hOf, 100), [8, 10]);
+  assert.deepEqual(windowRun(run.slice(3), 3, 10, 3, hOf, 100), [3, 6]);
+});
+test('windowRun: terlalu tinggi → cur…cur+1, lalu cur saja', () => {
+  assert.deepEqual(windowRun(run, 0, 10, 5, hOf, 39), [5, 7]);
+  assert.deepEqual(windowRun(run, 0, 10, 5, hOf, 19), [5, 6]);
+  assert.deepEqual(windowRun(run, 0, 10, 5, hOf, 5), [5, 6]);
 });

@@ -1,17 +1,25 @@
 import * as store from './store.js';
 import { openPdf, renderPage } from './pdf.js';
 import { setProgress } from './state.js';
-import { buildLayout, positionAt, scrollTopFor, visibleRange } from './layout.js';
+import { buildLayout, positionAt, scrollTopFor, visibleRange, windowRun } from './layout.js';
 import { load, h } from './library.js';
 import * as panels from './reader-panels.js';
 import { setActiveSeries } from './sync.js';
 
 const GAP = 8;
 const MAX_LIVE_PX = 48e6; // R9: batas total piksel kanvas hidup
+const MAX_LAYOUT_PX = 30e6; // R19: WebKit/Chrome menjepit layout sekitar 33,5 juta px
 let r = null; // sesi pembaca aktif
 let gen = 0;
 let wanted = null; // seri yang diminta dibuka (juga saat hanya pesan "belum ada di perangkat" yang tampil)
-const missText = (word, n) => `${word} ${n} belum ada di perangkat. Sambungkan internet untuk men-download.`;
+let dl = null; // download yang sedang berjalan, dari detail rak:sync: {fileId, got, size}
+let pending = null; // pesan "belum ada" yang tampil tanpa sesi: {el, word, n, id}
+const offText = (word, n) => `${word} ${n} belum ada di perangkat. Sambungkan internet untuk men-download.`;
+// File yang akan di-download sync: online -> "Sedang men-download", offline -> minta internet.
+const missText = (word, n, id) => {
+  if (dl?.fileId === id && dl.size) return `Sedang men-download ${word} ${n}… (${Math.floor((dl.got / dl.size) * 100)}%)`;
+  return navigator.onLine ? `Sedang men-download ${word} ${n}…` : offText(word, n);
+};
 
 const BACKUP = 'rak-pos:';
 
@@ -32,8 +40,21 @@ const app = () => document.getElementById('app');
 const back = () => { location.hash = '#/'; };
 
 function message(text) {
-  app().replaceChildren(h('div', { className: 'reader-msg' }, h('p', {}, text), h('button', { onclick: back }, 'Kembali ke rak')));
+  const p = h('p', {}, text);
+  app().replaceChildren(h('div', { className: 'reader-msg' }, p, h('button', { onclick: back }, 'Kembali ke rak')));
+  return p;
 }
+
+function refreshMiss() {
+  if (r) setMiss(r);
+  else if (pending?.el.isConnected) pending.el.textContent = missText(pending.word, pending.n, pending.id);
+}
+window.addEventListener('rak:sync', (e) => {
+  const { state, detail } = e.detail ?? {};
+  dl = state === 'syncing' && detail?.fileId ? detail : null;
+  refreshMiss();
+});
+for (const ev of ['online', 'offline']) window.addEventListener(ev, refreshMiss);
 
 export async function open(seriesId) {
   close();
@@ -55,12 +76,17 @@ export async function open(seriesId) {
   if (!s) return message('Seri tidak ditemukan.');
   if (!s.files.length) return message('Seri ini belum punya file.');
   const pi = s.files.findIndex((f) => f.id === progress?.fileId);
-  const run = await localRun(s.files, Math.max(0, pi));
+  const at = Math.max(0, pi);
+  const run = await localRun(s.files, at);
   const invert = await store.getKv(`invert:${seriesId}`).catch(() => false);
   if (my !== gen) return;
   const word = s.files.some((f) => /batch/i.test(f.name)) ? 'Batch' : 'Bagian';
-  if (!run) return message(missText(word, Math.max(0, pi) + 1));
-  const { lo, files } = run;
+  if (!run) {
+    window.dispatchEvent(new CustomEvent('rak:need')); // app.js: sync sekarang, jangan tunggu interval
+    const id = s.files[at].id;
+    pending = { el: message(missText(word, at + 1, id)), word, n: at + 1, id };
+    return;
+  }
 
   const posEl = h('span', { className: 'rpos' });
   const spacer = h('div', { className: 'rpages' });
@@ -76,11 +102,11 @@ export async function open(seriesId) {
     h('nav', { className: 'rbar rbottom' }, ...[['toc', 'Daftar isi'], ['bookmark', 'Bookmark'], ['night', 'Malam'], ['zoom', 'Zoom']]
       .map(([k, t]) => h('button', { 'data-act': k, onclick: acts[k] }, t))));
   const ses = r = {
-    seriesId, word, lo, files, topMiss, botMiss, all: s.files, multi: s.files.length > 1, root, spacer, posEl, zoom: 1,
+    seriesId, word, run: run.files, runLo: run.lo, lo: run.lo, files: [], topMiss, botMiss, all: s.files, multi: s.files.length > 1, root, spacer, posEl, zoom: 1,
     zoomBtn: root.querySelector('[data-act="zoom"]'), panel: null,
     slots: new Map(), docs: new Map(), L: null, W: 0, y0: 0, last: '', timer: 0, raf: 0, busy: false, lastScroll: 0, offs: [],
   };
-  setMiss(ses);
+  setWindow(ses, pick(ses, at));
   history.scrollRestoration = 'manual';
   app().replaceChildren(root);
   layoutPages(ses);
@@ -93,6 +119,7 @@ export async function open(seriesId) {
 
 export function close() {
   gen++;
+  pending = null;
   setActiveSeries(wanted = null);
   const s = r;
   if (!s) return;
@@ -115,17 +142,15 @@ window.addEventListener('rak:file-ready', async (e) => {
   const s = r;
   if (!s) { if (wanted && document.querySelector('.reader-msg')) open(wanted); return; }
   const id = e.detail?.fileId;
-  if (!s.all.some((f) => f.id === id) || s.files.some((f) => f.id === id)) return;
-  const { lo, files: { length: n } } = s;
-  const run = await localRun(s.all, lo);
-  if (s !== r || s.lo !== lo || s.files.length !== n || !run || run.files.length === n) return;
+  if (!s.all.some((f) => f.id === id) || s.run.some((f) => f.id === id)) return;
+  const { runLo, run: { length: n } } = s;
+  const run = await localRun(s.all, runLo);
+  if (s !== r || s.runLo !== runLo || s.run.length !== n || !run || run.files.length === n) return;
+  s.runLo = run.lo;
+  s.run = run.files;
   const pos = currentPos(s);
-  s.lo = run.lo;
-  s.files = run.files;
-  setMiss(s);
-  layoutPages(s);
-  if (pos) window.scrollTo(window.scrollX, s.y0 + scrollTopFor(s.L, pos));
-  update(s);
+  const win = pick(s, idxOf(s, pos));
+  if (sameWindow(s, win)) { setWindow(s, win); update(s); } else reflow(s, win, pos);
 });
 
 // Rentang file lokal berurutan terpanjang yang memuat all[at] (file dari perangkat lain bisa di tengah seri); null kalau all[at] tidak lokal.
@@ -143,12 +168,55 @@ async function localRun(all, at) {
   return { lo, files };
 }
 
+// Kotak "belum ada" hanya untuk file yang benar-benar tidak lokal; tetangga lokal di luar jendela tidak ditandai.
 function setMiss(s) {
-  const hi = s.lo + s.files.length;
-  s.topMiss.hidden = s.lo === 0;
-  s.topMiss.textContent = missText(s.word, s.lo);
-  s.botMiss.hidden = hi === s.all.length;
-  s.botMiss.textContent = missText(s.word, hi + 1);
+  const hi = s.lo + s.files.length, runHi = s.runLo + s.run.length;
+  s.topMiss.hidden = s.lo > s.runLo || s.runLo === 0;
+  s.topMiss.textContent = offText(s.word, s.runLo);
+  s.botMiss.hidden = hi < runHi || runHi === s.all.length;
+  s.botMiss.textContent = missText(s.word, runHi + 1, s.all[runHi]?.id);
+}
+
+const idxOf = (s, pos) => (pos ? s.all.findIndex((f) => f.id === pos.fileId) : s.lo);
+
+// R19: jendela berpusat di `center`; kalau hasilnya tidak memuat `need` (jendela menyusut), pusatkan di `need`.
+function pick(s, center, need = center) {
+  const W = Math.min(window.innerWidth, 900) * s.zoom;
+  const hOf = (f) => f.sizes.reduce((n, z) => n + (z.h / z.w) * W + GAP, 0);
+  const w = (c) => windowRun(s.run, s.runLo, s.runLo + s.run.length, c, hOf, MAX_LAYOUT_PX);
+  const win = w(center);
+  return need >= win[0] && need < win[1] ? win : w(need);
+}
+function setWindow(s, [lo, hi]) {
+  s.lo = lo;
+  s.files = s.run.slice(lo - s.runLo, hi - s.runLo);
+  setMiss(s);
+}
+const sameWindow = (s, [lo, hi]) => lo === s.lo && hi === s.lo + s.files.length;
+
+// Layout ulang ke jendela baru, posisi dijaga (jalur yang sama dengan rak:file-ready).
+function reflow(s, win, pos = currentPos(s)) {
+  setWindow(s, win);
+  layoutPages(s);
+  if (pos) window.scrollTo(window.scrollX, s.y0 + scrollTopFor(s.L, pos));
+  update(s);
+}
+
+// Posisi di file pertama/terakhir jendela dan masih ada file lokal di baliknya -> geser jendela.
+// Histeresis setengah file, supaya jendela 2 file tidak bolak-balik bergeser.
+function shiftWindow(s, y) {
+  const p = positionAt(s.L, y);
+  if (!p) return false;
+  const i = idxOf(s, p), hi = s.lo + s.files.length;
+  const back = i === s.lo && s.lo > s.runLo, fwd = i === hi - 1 && hi < s.runLo + s.run.length;
+  if (!back && !fwd) return false;
+  const top = scrollTopFor(s.L, { fileId: p.fileId, page: 1, offset: 0 });
+  const bot = scrollTopFor(s.L, { fileId: p.fileId, page: s.files[i - s.lo].sizes.length, offset: 1 });
+  const f = (y - top) / Math.max(1, bot - top);
+  const win = back && f < 0.5 ? pick(s, i - 1, i) : fwd && f > 0.5 ? pick(s, i) : null;
+  if (!win || sameWindow(s, win)) return false;
+  reflow(s, win, p);
+  return true;
 }
 
 function layoutPages(s) {
@@ -164,7 +232,12 @@ function layoutPages(s) {
 // Panel (bottom sheet) menempel di body; satu yang terbuka per sesi.
 function panel(s, fn) {
   s.panel?.();
-  s.panel = fn(s, { here: () => currentPos(s), jump: (pos) => window.scrollTo(window.scrollX, s.y0 + scrollTopFor(s.L, pos)) });
+  const jump = (pos) => {
+    const i = idxOf(s, pos);
+    if (i < s.lo || i >= s.lo + s.files.length) reflow(s, pick(s, i), pos); // lokal tapi di luar jendela
+    else window.scrollTo(window.scrollX, s.y0 + scrollTopFor(s.L, pos));
+  };
+  s.panel = fn(s, { here: () => currentPos(s), jump });
 }
 
 // Bangun ulang layout di zoom z lalu pulihkan pos; dengan `at` = {cx, mx, my}, pos adalah posisi di titik tengah cubitan (tetap di bawah jari).
@@ -172,6 +245,7 @@ function setZoom(s, z, pos = currentPos(s), at = null) {
   const k = z / s.zoom;
   s.zoom = z;
   s.spacer.style.transform = '';
+  setWindow(s, pick(s, idxOf(s, pos))); // zoom 4 bisa melewati batas tinggi -> jendela menyusut
   layoutPages(s);
   const left = s.spacer.getBoundingClientRect().left + window.scrollX;
   window.scrollTo(at ? left + at.cx * k - at.mx : 0, s.y0 + (pos ? scrollTopFor(s.L, pos) : 0) - (at ? at.my : 0));
@@ -237,6 +311,7 @@ function listen(s) {
   on(window, 'resize', () => {
     if (Math.min(window.innerWidth, 900) * s.zoom === s.W) return;
     const pos = currentPos(s);
+    setWindow(s, pick(s, idxOf(s, pos)));
     layoutPages(s);
     if (pos) window.scrollTo(0, s.y0 + scrollTopFor(s.L, pos));
     update(s);
@@ -293,6 +368,7 @@ function update(s) {
   s.raf = 0;
   if (s !== r) return;
   const y = Math.max(0, window.scrollY - s.y0);
+  if (shiftWindow(s, y)) return; // reflow sudah memanggil update
   const H = window.innerHeight;
   const [a, b] = visibleRange(s.L, y, H, s.zoom > 1 ? 1 : 2);
   for (const i of [...s.slots.keys()]) if (i < a || i > b) drop(s, i);
@@ -310,7 +386,7 @@ function update(s) {
     el.style.top = `${s.L.tops[i]}px`;
     el.style.height = `${s.L.heights[i]}px`;
     s.spacer.append(el);
-    s.slots.set(i, { el, canvas, dpr: 0, target: 0, vis: false, failed: false });
+    s.slots.set(i, { el, canvas, dpr: 0, target: 0, vis: false, failed: 0, tries: 0 });
   }
   // dpr tetangga diturunkan seperempat-seperempat supaya tidak memicu render ulang untuk selisih kecil; 0.25 = jaring pengaman memori.
   const want = Math.min(T, Math.sqrt(Math.max(0, MAX_LIVE_PX - used) / (off || 1)));
@@ -344,8 +420,11 @@ function drop(s, i) {
 function nextJob(s) {
   const mid = window.scrollY - s.y0 + window.innerHeight / 2;
   let best = -1, dist = Infinity;
+  const now = performance.now();
   for (const [i, sl] of s.slots) {
-    if (sl.failed || (sl.dpr && sl.dpr <= sl.target && !(sl.vis && sl.dpr < sl.target))) continue;
+    // Gagal gambar: satu kali coba lagi saat terlihat, minimal 10 dtk kemudian (relayout membuat slot baru).
+    if (sl.failed && !(sl.vis && now - sl.failed >= 10_000)) continue;
+    if ((sl.dpr && sl.dpr <= sl.target && !(sl.vis && sl.dpr < sl.target))) continue;
     const d = Math.abs(s.L.tops[i] + s.L.heights[i] / 2 - mid);
     if (d < dist) { dist = d; best = i; }
   }
@@ -363,9 +442,9 @@ async function pump(s) {
         if (s.slots.get(i) !== sl) continue;
         await renderPage(doc, p.page, sl.canvas, W, dpr);
         if (s.slots.get(i) !== sl) release(sl.canvas);
-        else sl.dpr = dpr;
+        else { sl.dpr = dpr; sl.failed = 0; }
       } catch (e) {
-        sl.failed = true;
+        sl.failed = sl.tries++ ? Infinity : performance.now();
         if (s === r) console.error('Gagal menggambar halaman', p.page, e);
       }
     }
