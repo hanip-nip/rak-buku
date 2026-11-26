@@ -76,6 +76,7 @@ export async function blobBytes() {
 
 export const getMeta = (id) => get('meta', id);
 export const putMeta = (id, m) => put('meta', m, id);
+export const deleteMeta = (id) => del('meta', id);
 
 export const outboxAll = () => run('outbox', 'readonly', (o) => o.getAll());
 export const outboxPut = (job) => put('outbox', job);

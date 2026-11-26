@@ -54,6 +54,7 @@ async function mutate(fn) {
   changed();
 }
 
+const fresh = async (id) => (await load()).series.find((x) => x.id === id);
 const save = (series) => { const now = Date.now(); return mutate((own) => upsertSeries(own, series, now)); };
 
 function percent(s, p) {
@@ -121,7 +122,7 @@ window.addEventListener('rak:changed', refresh);
 
 export function show() {
   const input = h('input', {
-    type: 'search', placeholder: 'Cari judul…', value: ui.q,
+    type: 'search', 'aria-label': 'Cari judul', placeholder: 'Cari judul…', value: ui.q,
     oninput: (e) => { ui.q = e.target.value; refresh(); },
   });
   const picker = h('input', { type: 'file', accept: 'application/pdf', multiple: true, hidden: true });
@@ -159,26 +160,46 @@ async function addDialog(files) {
       cover: '', files: [], deleted: false,
     };
     const ok = [], bad = [];
-    let cover = base.cover;
+    let cover = '', full = '';
+    const undo = (id) => Promise.allSettled([store.deleteBlob(id), store.deleteMeta(id)]);
     for (const [i, file] of files.entries()) { // berurutan, hemat memori iPhone
-      status.textContent = `Memproses ${i + 1}/${files.length}…`;
+      const label = `Memproses ${i + 1}/${files.length}`;
+      status.textContent = `${label}…`;
       let doc;
       try { doc = await openPdf(file); } catch { bad.push(file.name); continue; }
+      const id = crypto.randomUUID();
       try {
-        const id = crypto.randomUUID();
-        await store.putMeta(id, { sizes: await pageSizes(doc), outline: await outlinePages(doc).catch(() => []) });
-        await store.putBlob(id, file);
+        let meta;
+        try {
+          meta = { sizes: await pageSizes(doc, (d, t) => { status.textContent = `${label} · mengukur halaman ${d}/${t}`; }), outline: await outlinePages(doc).catch(() => []) };
+        } catch { bad.push(file.name); continue; }
+        try { await store.putMeta(id, meta); await store.putBlob(id, file); } catch {
+          await undo(id);
+          full = file.name;
+          break;
+        }
         if (!cover) cover = await makeCover(doc).catch(() => '');
         ok.push({ id, name: file.name, size: file.size, pages: doc.numPages });
-      } catch { bad.push(file.name); } finally { doc.destroy?.(); }
+      } finally { doc.destroy?.(); }
     }
     close();
+    let failed = '';
     if (ok.length) {
-      // Job upload dulu, supaya sync yang bangun karena rak:changed sudah melihatnya.
-      for (const f of ok) await store.outboxPut({ id: crypto.randomUUID(), type: 'upload', seriesId: base.id, fileId: f.id });
-      await save(addFiles({ ...base, cover }, ok, Date.now()));
+      // Ambil ulang: sync bisa mengubah seri selama pemrosesan.
+      const cur = (await fresh(base.id)) ?? base;
+      try {
+        await save(addFiles({ ...cur, cover: cur.cover || cover }, ok, Date.now()));
+        for (const f of ok) await store.outboxPut({ id: crypto.randomUUID(), type: 'upload', seriesId: base.id, fileId: f.id });
+      } catch {
+        await Promise.all(ok.map((f) => undo(f.id)));
+        failed = 'Gagal menyimpan ke rak. Tidak ada file yang ditambahkan.';
+      }
     }
-    if (bad.length) note(bad.map((n) => `${n} tidak bisa dibuka`).join('\n') + (ok.length ? '' : '\nTidak ada file yang ditambahkan.'));
+    const msgs = bad.map((n) => `${n} tidak bisa dibuka`);
+    if (full) msgs.push(`Penyimpanan HP penuh atau gagal menyimpan ${full}`);
+    if (failed) msgs.push(failed);
+    else if (!ok.length && bad.length) msgs.push('Tidak ada file yang ditambahkan.');
+    if (msgs.length) note(msgs.join('\n'));
   });
 }
 
@@ -203,36 +224,46 @@ function editDialog(s) {
     h('div', { className: 'row' }, h('button', { onclick: () => close() }, 'Batal'),
       h('button', {
         className: 'primary',
-        onclick: async () => { close(); await save({ ...s, title: title.value.trim() || s.title, category: cat.value }); },
+        onclick: async () => {
+          close();
+          const cur = await fresh(s.id);
+          if (cur) await save({ ...cur, title: title.value.trim() || cur.title, category: cat.value });
+        },
       }, 'Simpan')));
 }
 
 async function orderDialog(seriesId) {
   const s = (await load()).series.find((x) => x.id === seriesId);
   if (!s) return;
-  const move = async (i, d) => {
+  const move = async (id, d) => {
     close();
-    const o = s.files.map((f) => f.id);
-    [o[i], o[i + d]] = [o[i + d], o[i]];
-    const now = Date.now();
-    await mutate((own) => upsertSeries(own, reorderFiles(s, o, now), now));
+    const cur = await fresh(seriesId);
+    const o = cur?.files.map((f) => f.id) ?? [];
+    const i = o.indexOf(id);
+    if (i >= 0 && o[i + d]) {
+      [o[i], o[i + d]] = [o[i + d], o[i]];
+      const now = Date.now();
+      await mutate((own) => upsertSeries(own, reorderFiles(cur, o, now), now));
+    }
     orderDialog(seriesId);
   };
   const last = s.files.length - 1;
   const close = sheet('Urutan file', ...s.files.map((f, i) => h('div', { className: 'row item' },
     h('span', {}, f.name),
-    h('button', { disabled: i === 0, 'aria-label': 'Naik', onclick: () => move(i, -1) }, '↑'),
-    h('button', { disabled: i === last, 'aria-label': 'Turun', onclick: () => move(i, 1) }, '↓'))),
+    h('button', { disabled: i === 0, 'aria-label': 'Naik', onclick: () => move(f.id, -1) }, '↑'),
+    h('button', { disabled: i === last, 'aria-label': 'Turun', onclick: () => move(f.id, 1) }, '↓'))),
   h('button', { onclick: () => close() }, 'Selesai'));
 }
 
 async function delSeries(s, close) {
   if (!confirm(`Hapus seri "${s.title}"? File di perangkat dan di Drive ikut dihapus.`)) return;
   close();
+  const cur = (await fresh(s.id)) ?? s;
+  // Urutan: tombstone dulu, baru job trash, baru blob; kalau terhenti di tengah, tidak ada data hilang diam-diam.
+  await save({ ...cur, deleted: true });
   await store.outboxPut({
     id: crypto.randomUUID(), type: 'trash', seriesId: s.id,
-    driveIds: s.files.map((f) => f.driveId).filter((d) => d !== null),
+    driveIds: cur.files.map((f) => f.driveId).filter((d) => d !== null),
   });
-  for (const f of s.files) await store.deleteBlob(f.id);
-  await save({ ...s, deleted: true });
+  for (const f of cur.files) await store.deleteBlob(f.id);
 }

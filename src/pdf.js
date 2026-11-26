@@ -14,11 +14,14 @@ export async function openPdf(blob) {
   }
 }
 
-export async function pageSizes(doc) {
+export async function pageSizes(doc, onProgress) {
   const sizes = [];
   for (let i = 1; i <= doc.numPages; i++) {
-    const v = (await doc.getPage(i)).getViewport({ scale: 1 });
+    const page = await doc.getPage(i);
+    const v = page.getViewport({ scale: 1 });
     sizes.push({ w: v.width, h: v.height });
+    page.cleanup();
+    if (onProgress && (i % 100 === 0 || i === doc.numPages)) onProgress(i, doc.numPages);
   }
   return sizes;
 }
