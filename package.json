@@ -1,0 +1,1 @@
+{"name":"rak-buku","private":true,"type":"module","scripts":{"test":"node --test test/"}}
