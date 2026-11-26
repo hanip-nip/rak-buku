@@ -100,5 +100,12 @@ export async function uploadOffset(sessionUrl, size) {
 
 export const download = async (token, driveId) => (await call(`${API}/files/${driveId}?alt=media`, token)).blob();
 
+// R15: per rentang, supaya file besar tidak menjadi satu Response raksasa di memori.
+export async function downloadRange(token, driveId, start, end) {
+  const res = await call(`${API}/files/${driveId}?alt=media`, token, {}, { Range: `bytes=${start}-${end}` });
+  if (res.status !== 206) throw fail(res, 'range');
+  return res.blob();
+}
+
 export const trash = (token, driveId) => call(`${API}/files/${driveId}`, token,
   { method: 'PATCH', body: JSON.stringify({ trashed: true }) }, { 'Content-Type': 'application/json' });

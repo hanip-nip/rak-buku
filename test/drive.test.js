@@ -182,3 +182,12 @@ test('upload 0 byte ditolak', async () => {
   stub(() => assert.fail('tak boleh fetch'));
   await assert.rejects(drive.startUpload('TK', 'F', 'a.pdf', 0), /kosong/);
 });
+
+test('downloadRange mengirim header Range dan menuntut 206', async () => {
+  stub(() => new Response('abc', { status: 206 }));
+  assert.equal(await (await drive.downloadRange('TK', 'I', 8, 10)).text(), 'abc');
+  assert.equal(calls[0].init.headers.Range, 'bytes=8-10');
+  assert.match(calls[0].url, /files\/I\?alt=media/);
+  stub(() => new Response('semua', { status: 200 }));
+  await assert.rejects(drive.downloadRange('TK', 'I', 0, 4), (e) => e.status === 200);
+});

@@ -3,10 +3,12 @@ import { openPdf, pageSizes, outlinePages, makeCover } from './pdf.js';
 import { upsertSeries, addFiles, reorderFiles } from './state.js';
 import { mergeStates } from './merge.js';
 import { naturalCompare } from './natsort.js';
+import * as auth from './auth.js';
 
 const CATS = { komik: 'Komik', novel: 'Novel', lain: 'Buku lain' };
 const ui = { tab: 'semua', q: '' };
-let els = null; // {list, tabs, foot}; null kalau rak belum pernah tampil
+let els = null; // {list, tabs, sync, foot}; null kalau rak belum pernah tampil
+let syncSt = null; // detail event 'rak:sync' terakhir
 let seq = 0;
 
 export function h(tag, props = {}, ...kids) {
@@ -118,7 +120,21 @@ async function refresh() {
   els.list.replaceChildren(...(cards.length ? cards : [h('p', { className: 'muted' }, empty)]));
   els.foot.textContent = `Ruang terpakai di HP: ${(bytes / 1048576).toFixed(1)} MB`;
 }
-window.addEventListener('rak:changed', refresh);
+for (const ev of ['rak:changed', 'rak:refresh', 'rak:file-ready']) window.addEventListener(ev, refresh);
+window.addEventListener('rak:sync', (e) => { syncSt = e.detail; syncLine(); });
+
+async function syncLine() {
+  if (!els) return;
+  const { state, detail = {} } = syncSt ?? {};
+  const masuk = h('button', { onclick: () => auth.login() }, 'Masuk');
+  if (state === 'login') return els.sync.replaceChildren('Belum masuk Google · ', masuk);
+  if (state === 'relogin') return els.sync.replaceChildren('Login ulang diperlukan · ', masuk);
+  if (state === 'offline') return els.sync.replaceChildren('Offline — perubahan disimpan di HP');
+  if (state === 'syncing') return els.sync.replaceChildren(`Menyinkronkan…${detail.total ? ` (mengunggah ${detail.done + 1}/${detail.total})` : ''}`);
+  const my = syncSt;
+  const at = await store.getKv('lastSync').catch(() => null);
+  if (my === syncSt) els.sync.replaceChildren(at ? `Tersinkron ${Math.max(0, Math.round((Date.now() - at) / 60000))} menit lalu` : '');
+}
 
 export function show() {
   const input = h('input', {
@@ -131,11 +147,12 @@ export function show() {
     picker.value = '';
     if (f.length) addDialog(f);
   });
-  els = { tabs: h('nav', { className: 'tabs' }), list: h('section', { className: 'list' }), foot: h('footer', { className: 'muted' }) };
+  els = { tabs: h('nav', { className: 'tabs' }), list: h('section', { className: 'list' }), sync: h('p', { className: 'muted' }), foot: h('footer', { className: 'muted' }) };
   document.getElementById('app').replaceChildren(
-    h('header', { className: 'top' }, h('h1', {}, 'Rak Buku'), input), els.tabs, els.list, els.foot, picker,
+    h('header', { className: 'top' }, h('h1', {}, 'Rak Buku'), input), els.tabs, els.list, els.sync, els.foot, picker,
     h('button', { className: 'fab', 'aria-label': 'Tambah PDF', onclick: () => picker.click() }, '+'));
   refresh();
+  syncLine();
 }
 
 const catSelect = (val) => h('select', {}, ...Object.entries(CATS).map(([k, v]) => h('option', { value: k, selected: k === val }, v)));

@@ -1,0 +1,189 @@
+import { mergeStates } from './merge.js';
+import { setDriveId } from './state.js';
+import { filesToFetch } from './prefetch.js';
+
+const RANGE = 8 * 1024 * 1024;
+let active = null; // seri yang sedang dibuka di pembaca
+export const setActiveSeries = (id) => { active = id; };
+export const activeSeries = () => active;
+
+const emit = (type, detail) => {
+  if (globalThis.dispatchEvent) globalThis.dispatchEvent(new CustomEvent(type, { detail }));
+};
+const relogin = () => Object.assign(new Error('relogin'), { name: 'ReloginError' });
+const validState = (s) => typeof s?.device?.id === 'string' && Array.isArray(s.series)
+  && Array.isArray(s.bookmarks) && s.progress && typeof s.progress === 'object';
+
+class Stopped extends Error {}
+
+export function createSync({ drive, store, auth, pdf, now = Date.now, online = () => navigator.onLine }) {
+  let running = false, again = false, stopped = false, timer = 0;
+  const status = (state, detail = {}) => emit('rak:sync', { state, detail });
+
+  async function run() {
+    if (running) { again = true; return 'busy'; }
+    running = true; again = false; stopped = false;
+    try {
+      return await body();
+    } catch (e) {
+      if (e?.name === 'ReloginError') { status('relogin'); return 'relogin'; }
+      if (e instanceof Stopped || e instanceof TypeError || !online()) { status('offline'); return 'offline'; }
+      console.error('Sinkronisasi gagal', e);
+      status('error');
+      return 'error';
+    } finally {
+      running = false;
+      if (again && !stopped) schedule();
+    }
+  }
+
+  async function body() {
+    if (!online()) throw new Stopped();
+    if (!(await auth.isLoggedIn())) { status('login'); return 'offline'; }
+    status('syncing');
+    let token = await auth.getToken(now());
+    // 401 → token baru lalu ulangi sekali; 401 kedua = perlu login ulang.
+    const api = async (fn) => {
+      try { return await fn(token); } catch (e) {
+        if (e?.status !== 401) throw e;
+        auth._reset();
+        token = await auth.getToken(now());
+        try { return await fn(token); } catch (e2) { throw e2?.status === 401 ? relogin() : e2; }
+      }
+    };
+    let folder = await api((t) => drive.ensureFolder(t));
+    // Folder 404 (dihapus di Drive) → lupakan, buat/cari lagi, ulangi sekali.
+    const inFolder = async (fn) => {
+      try { return await api((t) => fn(t, folder)); } catch (e) {
+        if (e?.status !== 404) throw e;
+        await drive.forgetFolder();
+        folder = await api((t) => drive.ensureFolder(t));
+        return api((t) => fn(t, folder));
+      }
+    };
+    const me = await store.deviceId();
+
+    // 1. Status perangkat lain: hanya yang modifiedTime-nya berubah.
+    const listed = await inFolder((t, f) => drive.listStatus(t, f));
+    const cache = await store.getRemote();
+    const remote = {};
+    let ownId = await store.getKv('ownStatusId');
+    for (const f of listed) {
+      const m = /^status-(.+)\.json$/.exec(f.name);
+      if (!m) continue;
+      const dev = m[1];
+      if (dev === me) { ownId ??= f.id; continue; }
+      if (remote[dev] && remote[dev].modifiedTime >= f.modifiedTime) continue;
+      if (cache[dev]?.modifiedTime === f.modifiedTime) { remote[dev] = cache[dev]; continue; }
+      const state = await api((t) => drive.readJson(t, f.id));
+      if (validState(state)) remote[dev] = { modifiedTime: f.modifiedTime, state, fileId: f.id };
+    }
+    await store.saveRemote(remote);
+
+    // 2. Status sendiri, sebelum upload panjang (progres baca tidak boleh menunggu).
+    const writeOwn = async () => {
+      const own = await store.getOwn();
+      const name = `status-${me}.json`;
+      try {
+        ownId = await inFolder((t, f) => drive.writeJson(t, f, name, own, ownId));
+      } catch (e) {
+        if (e?.status !== 404 || !ownId) throw e;
+        ownId = await inFolder((t, f) => drive.writeJson(t, f, name, own));
+      }
+      await store.setKv('ownStatusId', ownId);
+      return own;
+    };
+    const own = await writeOwn();
+    const merged = mergeStates([own, ...Object.values(remote).map((r) => r.state)], me);
+    await store.saveMerged(merged);
+    emit('rak:refresh');
+
+    // 3. Antrean, berurutan.
+    const jobs = await store.outboxAll();
+    const total = jobs.filter((j) => j.type === 'upload').length;
+    let done = 0;
+    for (const job of jobs) {
+      if (stopped || !online()) throw new Stopped();
+      if (job.type === 'trash') {
+        for (const id of job.driveIds ?? []) {
+          try { await api((t) => drive.trash(t, id)); } catch (e) { if (e?.status !== 404) throw e; }
+        }
+        await store.outboxDelete(job.id);
+      } else if (job.type === 'upload') {
+        status('syncing', { done, total });
+        if (await upload(job, inFolder)) await writeOwn();
+        done++;
+      }
+    }
+
+    // 4. Prefetch.
+    await prefetch(merged, api);
+    const at = now();
+    await store.setKv('lastSync', at);
+    status('ok', { at });
+    return 'ok';
+  }
+
+  // true kalau selesai ter-upload.
+  async function upload(job, inFolder) {
+    const blob = await store.getBlob(job.fileId);
+    if (!blob) { await store.outboxDelete(job.id); return false; } // sudah dihapus dari perangkat
+    let r = null;
+    if (job.sessionUrl) {
+      try { r = await drive.uploadOffset(job.sessionUrl, blob.size); } catch (e) {
+        if (e?.status !== 404 && e?.status !== 410) throw e;
+      }
+    }
+    if (!r) {
+      const own = await store.getOwn();
+      const name = own.series.find((s) => s.id === job.seriesId)?.files.find((f) => f.id === job.fileId)?.name ?? `${job.fileId}.pdf`;
+      const sessionUrl = await inFolder((t, f) => drive.startUpload(t, f, name, blob.size));
+      job = { ...job, sessionUrl, size: blob.size };
+      await store.outboxPut(job);
+      r = { done: false, next: 0 };
+    }
+    while (!r.done) {
+      if (stopped || !online()) throw new Stopped(); // job tetap di antrean
+      r = await drive.uploadChunk(job.sessionUrl, blob, r.next);
+    }
+    const driveId = r.driveId;
+    await store.updateOwn((own) => setDriveId(own, job.seriesId, job.fileId, driveId, now()));
+    await store.outboxDelete(job.id);
+    return true;
+  }
+
+  async function prefetch(merged, api) {
+    const newest = Object.entries(merged.progress).sort((a, b) => b[1].updatedAt - a[1].updatedAt)[0]?.[0];
+    const s = merged.series.find((x) => x.id === (active ?? newest));
+    if (!s || !pdf) return;
+    const local = new Set();
+    for (const f of s.files) if (await store.hasBlob(f.id)) local.add(f.id);
+    for (const id of filesToFetch(s, merged.progress[s.id], (x) => local.has(x))) {
+      const f = s.files.find((x) => x.id === id);
+      if (!f.driveId || !f.size) continue;
+      const parts = [];
+      for (let a = 0; a < f.size; a += RANGE) {
+        if (stopped || !online()) throw new Stopped();
+        const b = Math.min(a + RANGE, f.size) - 1;
+        parts.push(await api((t) => drive.downloadRange(t, f.driveId, a, b)));
+      }
+      const blob = new Blob(parts, { type: 'application/pdf' });
+      const doc = await pdf.openPdf(blob);
+      let meta;
+      try {
+        meta = { sizes: await pdf.pageSizes(doc), outline: await pdf.outlinePages(doc).catch(() => []) };
+      } finally { doc.destroy?.(); }
+      await store.putMeta(id, meta);
+      await store.putBlob(id, blob);
+      emit('rak:file-ready', { fileId: id });
+    }
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    timer = setTimeout(run, 3000);
+  }
+  const stop = () => { stopped = true; clearTimeout(timer); };
+
+  return { run, schedule, stop };
+}

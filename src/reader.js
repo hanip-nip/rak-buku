@@ -4,11 +4,14 @@ import { setProgress } from './state.js';
 import { buildLayout, positionAt, scrollTopFor, visibleRange } from './layout.js';
 import { load, h } from './library.js';
 import * as panels from './reader-panels.js';
+import { setActiveSeries } from './sync.js';
 
 const GAP = 8;
 const MAX_LIVE_PX = 48e6; // R9: batas total piksel kanvas hidup
 let r = null; // sesi pembaca aktif
 let gen = 0;
+let wanted = null; // seri yang diminta dibuka (juga saat hanya pesan "belum ada di perangkat" yang tampil)
+const missText = (word, n) => `${word} ${n} belum ada di perangkat. Sambungkan internet untuk men-download.`;
 
 const BACKUP = 'rak-pos:';
 
@@ -34,6 +37,7 @@ function message(text) {
 
 export async function open(seriesId) {
   close();
+  setActiveSeries(wanted = seriesId);
   const my = ++gen;
   app().replaceChildren(h('p', { className: 'muted reader-msg' }, 'Memuat…'));
   await store.deviceId(); // supaya updateOwn saat pagehide tidak menunggu IDB untuk deviceId
@@ -59,9 +63,8 @@ export async function open(seriesId) {
   const invert = await store.getKv(`invert:${seriesId}`).catch(() => false);
   if (my !== gen) return;
   const word = s.files.some((f) => /batch/i.test(f.name)) ? 'Batch' : 'Bagian';
-  const missText = `${word} ${files.length + 1} belum ada di perangkat. Sambungkan internet untuk men-download.`;
   const pi = s.files.findIndex((f) => f.id === progress?.fileId);
-  if (!files.length || pi >= files.length) return message(missText);
+  if (!files.length || pi >= files.length) return message(missText(word, files.length + 1));
 
   const posEl = h('span', { className: 'rpos' });
   const spacer = h('div', { className: 'rpages' });
@@ -70,7 +73,7 @@ export async function open(seriesId) {
     night: () => panel(ses, panels.night), zoom: () => { if (ses.zoom !== 1) setZoom(ses, 1); },
   };
   const root = h('div', { className: `reader${invert ? ' invert' : ''}` }, spacer,
-    files.length < s.files.length ? h('p', { className: 'rmissing' }, missText) : null,
+    files.length < s.files.length ? h('p', { className: 'rmissing' }, missText(word, files.length + 1)) : null,
     h('header', { className: 'rbar rtop' },
       h('button', { 'aria-label': 'Kembali', onclick: back }, '←'),
       h('div', { className: 'rtitle' }, h('strong', {}, s.title), posEl)),
@@ -93,6 +96,7 @@ export async function open(seriesId) {
 
 export function close() {
   gen++;
+  setActiveSeries(wanted = null);
   const s = r;
   if (!s) return;
   const pos = currentPos(s);
@@ -108,6 +112,29 @@ export function close() {
   window.scrollTo(0, 0);
   if (pos) persist(s, pos);
 }
+
+// R16: file hasil prefetch. Tanpa sesi (pesan "belum ada") → buka ulang; dengan sesi → sambung layout, posisi dijaga.
+window.addEventListener('rak:file-ready', async (e) => {
+  const s = r;
+  if (!s) { if (wanted && document.querySelector('.reader-msg')) open(wanted); return; }
+  const start = s.files.length;
+  if (!s.all.slice(start).some((f) => f.id === e.detail?.fileId)) return;
+  const add = [];
+  for (const f of s.all.slice(start)) {
+    const meta = (await store.hasBlob(f.id)) ? await store.getMeta(f.id) : null;
+    if (!meta?.sizes?.length) break;
+    add.push({ id: f.id, sizes: meta.sizes, outline: meta.outline ?? [] });
+  }
+  if (s !== r || s.files.length !== start || !add.length) return;
+  const pos = currentPos(s);
+  s.files.push(...add);
+  const miss = s.root.querySelector('.rmissing');
+  if (s.files.length === s.all.length) miss?.remove();
+  else if (miss) miss.textContent = missText(s.word, s.files.length + 1);
+  layoutPages(s);
+  if (pos) window.scrollTo(window.scrollX, s.y0 + scrollTopFor(s.L, pos));
+  update(s);
+});
 
 function layoutPages(s) {
   s.W = Math.min(window.innerWidth, 900) * s.zoom;
