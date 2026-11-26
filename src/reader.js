@@ -79,7 +79,7 @@ export async function open(seriesId) {
   const ses = r = {
     seriesId, word, files, all: s.files, multi: s.files.length > 1, root, spacer, posEl, zoom: 1,
     zoomBtn: root.querySelector('[data-act="zoom"]'), panel: null,
-    slots: new Map(), docs: new Map(), L: null, W: 0, y0: 0, dpr: 1, last: '', timer: 0, raf: 0, busy: false, lastScroll: 0, offs: [],
+    slots: new Map(), docs: new Map(), L: null, W: 0, y0: 0, last: '', timer: 0, raf: 0, busy: false, lastScroll: 0, offs: [],
   };
   history.scrollRestoration = 'manual';
   app().replaceChildren(root);
@@ -125,14 +125,14 @@ function panel(s, fn) {
   s.panel = fn(s, { here: () => currentPos(s), jump: (pos) => window.scrollTo(window.scrollX, s.y0 + scrollTopFor(s.L, pos)) });
 }
 
-// Bangun ulang layout di zoom z lalu pulihkan pos; `at` = {cx, mx} menjaga titik tengah cubitan secara horizontal.
+// Bangun ulang layout di zoom z lalu pulihkan pos; dengan `at` = {cx, mx, my}, pos adalah posisi di titik tengah cubitan (tetap di bawah jari).
 function setZoom(s, z, pos = currentPos(s), at = null) {
   const k = z / s.zoom;
   s.zoom = z;
   s.spacer.style.transform = '';
   layoutPages(s);
   const left = s.spacer.getBoundingClientRect().left + window.scrollX;
-  window.scrollTo(at ? left + at.cx * k - at.mx : 0, s.y0 + (pos ? scrollTopFor(s.L, pos) : 0));
+  window.scrollTo(at ? left + at.cx * k - at.mx : 0, s.y0 + (pos ? scrollTopFor(s.L, pos) : 0) - (at ? at.my : 0));
   s.zoomBtn.textContent = z === 1 ? 'Zoom' : `Zoom ${Math.round(z * 100)}%`;
   update(s);
 }
@@ -145,7 +145,7 @@ function startPinch(s, ptrs) {
   const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
   const rect = s.spacer.getBoundingClientRect();
   s.spacer.style.transformOrigin = `${mx - rect.left}px ${my - rect.top}px`;
-  return { d0: d || 1, k: 1, pos: currentPos(s), cx: mx - rect.left, mx };
+  return { d0: d || 1, k: 1, pos: positionAt(s.L, Math.max(0, window.scrollY - s.y0 + my)), cx: mx - rect.left, mx, my };
 }
 
 function movePinch(s, p, ptrs) {
@@ -251,22 +251,29 @@ function update(s) {
   s.raf = 0;
   if (s !== r) return;
   const y = Math.max(0, window.scrollY - s.y0);
-  const [a, b] = visibleRange(s.L, y, window.innerHeight, 2);
+  const H = window.innerHeight;
+  const [a, b] = visibleRange(s.L, y, H, s.zoom > 1 ? 1 : 2);
   for (const i of [...s.slots.keys()]) if (i < a || i > b) drop(s, i);
-  let area = 0;
+  // R13: halaman yang terlihat selalu di dpr target (hanya dibatasi 16,7 Mpx per kanvas di renderPage);
+  // anggaran 48 Mpx hanya menurunkan dpr tetangga di luar layar.
+  const T = Math.min(window.devicePixelRatio || 1, 2);
+  const vis = (i) => s.L.tops[i] < y + H && s.L.tops[i] + s.L.heights[i] > y;
+  let used = 0, off = 0;
   for (let i = a; i <= b; i++) {
-    area += s.W * s.L.heights[i];
+    const area = s.W * s.L.heights[i];
+    if (vis(i)) used += Math.min(area * T * T, 16777216); else off += area;
     if (s.slots.has(i)) continue;
-    const canvas = h('canvas', { 'aria-hidden': 'true' });
+    const canvas = h('canvas', { 'aria-hidden': 'true', width: 0, height: 0 }); // 0 sampai digambar, bukan 300x150 bawaan
     const el = h('div', { className: 'rslot' }, canvas);
     el.style.top = `${s.L.tops[i]}px`;
     el.style.height = `${s.L.heights[i]}px`;
     s.spacer.append(el);
-    s.slots.set(i, { el, canvas, dpr: 0, failed: false });
+    s.slots.set(i, { el, canvas, dpr: 0, target: 0, vis: false, failed: false });
   }
-  // dpr diturunkan seperempat-seperempat supaya tidak memicu render ulang untuk selisih kecil.
-  const want = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(MAX_LIVE_PX / (area || 1)));
-  s.dpr = Math.max(0.25, Math.floor(want * 4) / 4); // < 1 hanya saat zoom besar, agar anggaran tetap terjaga
+  // dpr tetangga diturunkan seperempat-seperempat supaya tidak memicu render ulang untuk selisih kecil; 0.25 = jaring pengaman memori.
+  const want = Math.min(T, Math.sqrt(Math.max(0, MAX_LIVE_PX - used) / (off || 1)));
+  const offDpr = Math.max(0.25, Math.floor(want * 4) / 4);
+  for (const [i, sl] of s.slots) { sl.vis = vis(i); sl.target = sl.vis ? T : offDpr; }
   showPos(s, y);
   pump(s);
 }
@@ -291,12 +298,12 @@ function drop(s, i) {
   s.slots.delete(i);
 }
 
-// Slot yang belum digambar atau dpr-nya di atas anggaran; terdekat ke tengah layar dulu.
+// Slot yang belum digambar, di atas target (turunkan), atau terlihat di bawah target (naikkan); terdekat ke tengah dulu.
 function nextJob(s) {
   const mid = window.scrollY - s.y0 + window.innerHeight / 2;
   let best = -1, dist = Infinity;
   for (const [i, sl] of s.slots) {
-    if (sl.failed || (sl.dpr && sl.dpr <= s.dpr)) continue;
+    if (sl.failed || (sl.dpr && sl.dpr <= sl.target && !(sl.vis && sl.dpr < sl.target))) continue;
     const d = Math.abs(s.L.tops[i] + s.L.heights[i] / 2 - mid);
     if (d < dist) { dist = d; best = i; }
   }
@@ -308,7 +315,7 @@ async function pump(s) {
   s.busy = true;
   try {
     for (let i; s === r && (i = nextJob(s)) != null;) {
-      const sl = s.slots.get(i), p = s.L.pages[i], dpr = s.dpr, W = s.W;
+      const sl = s.slots.get(i), p = s.L.pages[i], dpr = sl.target, W = s.W;
       try {
         const doc = await getDoc(s, p.fileId);
         if (s.slots.get(i) !== sl) continue;
