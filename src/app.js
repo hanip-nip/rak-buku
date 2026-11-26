@@ -1,19 +1,15 @@
 import * as store from './store.js';
 import * as library from './library.js';
 import * as reader from './reader.js';
+import * as auth from './auth.js';
 
 const app = () => document.getElementById('app');
 
-function takeAuthHash() {
-  const m = /^#(auth|auth-error)=(.*)$/.exec(location.hash);
-  if (!m) return;
-  history.replaceState(null, '', location.pathname + location.search);
-  let val;
-  try { val = decodeURIComponent(m[2]); } catch { val = null; }
-  if (m[1] === 'auth' && val) store.setAuth(val).catch(() => {});
-  else {
+async function takeAuthHash() {
+  const { error } = await auth.takeAuthFromHash().catch(() => ({}));
+  if (error) {
     const p = document.createElement('p');
-    p.textContent = `Gagal masuk: ${val ?? 'data tidak valid'}`;
+    p.textContent = `Gagal masuk: ${error}`;
     app().before(p);
   }
 }

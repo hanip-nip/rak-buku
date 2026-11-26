@@ -1,9 +1,10 @@
-const VERSION = 'v2';
+const VERSION = 'v3';
 const CACHE = `rak-buku-${VERSION}`;
 const FILES = [
   './', 'index.html', 'app.css', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png',
   'src/app.js', 'src/library.js', 'src/reader.js', 'src/reader-panels.js', 'src/store.js', 'src/pdf.js',
   'src/natsort.js', 'src/state.js', 'src/merge.js', 'src/layout.js', 'src/prefetch.js',
+  'src/config.js', 'src/auth.js', 'src/drive.js',
   'vendor/pdf.min.mjs', 'vendor/pdf.worker.min.mjs',
 ];
 
