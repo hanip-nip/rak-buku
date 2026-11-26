@@ -166,11 +166,13 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
   }
 
   async function prefetch(merged, api) {
+    // R18: seri yang dibuka di pembaca; kalau tidak ada, seri progres terbaru HANYA kalau perangkat ini sudah punya >= 1 file-nya.
     const newest = Object.entries(merged.progress).sort((a, b) => b[1].updatedAt - a[1].updatedAt)[0]?.[0];
     const s = merged.series.find((x) => x.id === (active ?? newest));
     if (!s || !pdf) return;
     const local = new Set();
     for (const f of s.files) if (await store.hasBlob(f.id)) local.add(f.id);
+    if (active == null && !local.size) return;
     for (const id of filesToFetch(s, merged.progress[s.id], (x) => local.has(x))) {
       const f = s.files.find((x) => x.id === id);
       if (!f.driveId || !f.size) continue;
@@ -179,8 +181,8 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
       try {
         await fetchFile(f, api);
       } catch (e) {
-        // Gangguan jaringan/login/berhenti: coba lagi di run berikut, tanpa menandai gagal.
-        if (e instanceof Stopped || e instanceof TypeError || e?.name === 'ReloginError' || !online()) return;
+        // Gangguan jaringan/login/berhenti: tidak ditandai gagal; dilempar supaya status run benar (bukan 'ok').
+        if (e instanceof Stopped || e instanceof TypeError || e?.name === 'ReloginError' || !online()) throw e;
         console.error('Prefetch gagal', f.name, e);
         await store.setKv(failKey, now());
       }
@@ -191,6 +193,7 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
     const parts = [];
     for (let a = 0; a < f.size;) {
       if (stopped || !online()) throw new Stopped();
+      status('syncing', { fileId: f.id, got: a, size: f.size }); // progres download untuk pembaca dan rak
       const b = Math.min(a + RANGE, f.size) - 1;
       const part = await api((t) => drive.downloadRange(t, f.driveId, a, b));
       if (!part.size) throw new Error('rentang kosong');

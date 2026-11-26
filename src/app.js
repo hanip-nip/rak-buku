@@ -41,6 +41,7 @@ async function boot() {
   // Pemicu sync. 'rak:refresh' sengaja tidak memicu, supaya tidak berputar.
   window.addEventListener('rak:changed', () => { if (syncOnChange()) sync.schedule(); });
   window.addEventListener('online', () => sync.run());
+  window.addEventListener('rak:need', () => sync.run()); // pembaca butuh file yang belum ada di perangkat
   window.addEventListener('pagehide', sync.stop);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') sync.run(); });
   setInterval(() => { if (activeSeries()) sync.run(); }, 30_000);

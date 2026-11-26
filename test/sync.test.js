@@ -254,3 +254,58 @@ test("rak:changed saat seri terbuka di pembaca tidak menjadwalkan sync", () => {
   setActiveSeries('s1');
   assert.equal(syncOnChange(), false);
 });
+
+test('R18: tanpa seri aktif, seri progres terbaru tanpa file lokal tidak di-prefetch', async () => {
+  st.own.series[0].files = [file('f1', { driveId: 'D1' })];
+  st.own.progress = { s1: { fileId: 'f1', page: 1, offset: 0, updatedAt: 5 } };
+  st.blobs.clear();
+  let n = 0;
+  drv.downloadRange = async () => { n++; return new Blob([new Uint8Array(20)]); };
+  assert.equal(await createSync({ ...deps, pdf: pdfOk }).run(), 'ok');
+  assert.equal(n, 0);
+  assert.ok(!st.blobs.has('f1'));
+});
+
+test('R18: tanpa seri aktif, seri progres terbaru yang sudah punya file lokal di-prefetch', async () => {
+  st.own.series[0].files = [file('f1', { driveId: 'D1' }), file('f2', { driveId: 'D2' })];
+  st.own.progress = { s1: { fileId: 'f1', page: 1, offset: 0, updatedAt: 5 } };
+  st.blobs = new Map([['f1', new Blob(['x'])]]);
+  drv.downloadRange = async () => new Blob([new Uint8Array(20)]);
+  assert.equal(await createSync({ ...deps, pdf: pdfOk }).run(), 'ok');
+  assert.ok(st.blobs.has('f2'));
+});
+
+test('prefetch: offline di tengah download → run offline, lastSync tidak maju, tidak ditandai gagal', async () => {
+  st.own.series[0].files = [file('f1', { driveId: 'D1', size: 20 * 1024 * 1024 })];
+  st.blobs.clear();
+  setActiveSeries('s1');
+  let on = true;
+  drv.downloadRange = async () => { on = false; return new Blob([new Uint8Array(8 * 1024 * 1024)]); };
+  assert.equal(await createSync({ ...deps, pdf: pdfOk, online: () => on }).run(), 'offline');
+  assert.equal(st.kv.lastSync, undefined);
+  assert.equal(st.kv['prefetchFail:f1'], undefined);
+});
+
+test('prefetch: relogin di tengah download → run relogin', async () => {
+  st.own.series[0].files = [file('f1', { driveId: 'D1' })];
+  st.blobs.clear();
+  setActiveSeries('s1');
+  drv.downloadRange = async () => { throw err(401); };
+  assert.equal(await createSync({ ...deps, pdf: pdfOk }).run(), 'relogin');
+  assert.equal(st.kv.lastSync, undefined);
+});
+
+test('prefetch memancarkan progres download di rak:sync', async () => {
+  const M = 8 * 1024 * 1024;
+  st.own.series[0].files = [file('f1', { driveId: 'D1', size: M + 5 })];
+  st.blobs.clear();
+  setActiveSeries('s1');
+  drv.downloadRange = async (t, id, a, b) => new Blob([new Uint8Array(b - a + 1)]);
+  const events = [];
+  globalThis.dispatchEvent = (e) => { events.push(e); return true; };
+  try {
+    assert.equal(await createSync({ ...deps, pdf: pdfOk }).run(), 'ok');
+  } finally { delete globalThis.dispatchEvent; }
+  const prog = events.filter((e) => e.type === 'rak:sync' && e.detail.detail.fileId).map((e) => e.detail.detail);
+  assert.deepEqual(prog, [{ fileId: 'f1', got: 0, size: M + 5 }, { fileId: 'f1', got: M, size: M + 5 }]);
+});
