@@ -46,6 +46,23 @@ export async function getOwn() {
   return (await get('kv', 'own')) ?? newDeviceState(await deviceId(), deviceName());
 }
 export const saveOwn = (s) => put('kv', s, 'own');
+// Baca-ubah-tulis 'own' dalam SATU transaksi readwrite: tidak terbelah suspend iOS, tidak menimpa penulis lain.
+export async function updateOwn(fn) {
+  const id = await deviceId();
+  const d = await db();
+  return new Promise((res, rej) => {
+    const tx = d.transaction('kv', 'readwrite');
+    const o = tx.objectStore('kv');
+    let next;
+    const req = o.get('own');
+    req.onsuccess = () => {
+      try { next = fn(req.result ?? newDeviceState(id, deviceName())); o.put(next, 'own'); } catch (e) { rej(e); tx.abort(); }
+    };
+    tx.oncomplete = () => res(next);
+    tx.onerror = () => rej(tx.error ?? req.error);
+    tx.onabort = () => rej(tx.error ?? new Error('transaksi dibatalkan'));
+  });
+}
 export const getMerged = () => get('kv', 'merged');
 export const saveMerged = (m) => put('kv', m, 'merged');
 export const getRemote = async () => (await get('kv', 'remote')) ?? {};

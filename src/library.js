@@ -50,7 +50,7 @@ export async function load() {
 }
 
 async function mutate(fn, quiet) {
-  await store.saveOwn(fn(await store.getOwn()));
+  await store.updateOwn(fn);
   if (!quiet) changed();
 }
 

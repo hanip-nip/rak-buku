@@ -9,6 +9,21 @@ const MAX_LIVE_PX = 48e6; // R9: batas total piksel kanvas hidup
 let r = null; // sesi pembaca aktif
 let gen = 0;
 
+const BACKUP = 'rak-pos:';
+
+// R11: cadangan sinkron di localStorage, karena tulisan IndexedDB bisa hilang saat halaman langsung ditutup.
+function readBackup(seriesId) {
+  try {
+    const raw = localStorage.getItem(BACKUP + seriesId);
+    const b = JSON.parse(raw);
+    const ok = typeof b?.fileId === 'string' && Number.isFinite(b.page) && Number.isFinite(b.offset) && Number.isFinite(b.updatedAt);
+    return { b: ok ? b : null, raw };
+  } catch { return { b: null, raw: null }; }
+}
+function dropBackup(seriesId, raw) {
+  try { if (localStorage.getItem(BACKUP + seriesId) === raw) localStorage.removeItem(BACKUP + seriesId); } catch { /* storage diblokir */ }
+}
+
 const app = () => document.getElementById('app');
 const back = () => { location.hash = '#/'; };
 
@@ -20,9 +35,18 @@ export async function open(seriesId) {
   close();
   const my = ++gen;
   app().replaceChildren(h('p', { className: 'muted reader-msg' }, 'Memuat…'));
+  await store.deviceId(); // supaya updateOwn saat pagehide tidak menunggu IDB untuk deviceId
   const view = await load();
   const s = view.series.find((x) => x.id === seriesId);
   if (my !== gen) return;
+  let progress = view.progress[seriesId];
+  const { b: backup, raw } = readBackup(seriesId);
+  if (backup && s && backup.updatedAt > (progress?.updatedAt ?? -1)) {
+    progress = backup;
+    store.updateOwn((own) => setProgress(own, seriesId, backup, backup.updatedAt))
+      .then(() => { dropBackup(seriesId, raw); window.dispatchEvent(new CustomEvent('rak:changed')); })
+      .catch((e) => console.error('Gagal menerapkan cadangan posisi', e));
+  } else if (raw != null) dropBackup(seriesId, raw);
   if (!s) return message('Seri tidak ditemukan.');
   if (!s.files.length) return message('Seri ini belum punya file.');
   const files = [];
@@ -34,7 +58,6 @@ export async function open(seriesId) {
   if (my !== gen) return;
   const word = s.files.some((f) => /batch/i.test(f.name)) ? 'Batch' : 'Bagian';
   const missText = `${word} ${files.length + 1} belum ada di perangkat. Sambungkan internet untuk men-download.`;
-  const progress = view.progress[seriesId];
   const pi = s.files.findIndex((f) => f.id === progress?.fileId);
   if (!files.length || pi >= files.length) return message(missText);
 
@@ -95,9 +118,15 @@ async function persist(s, pos) {
   const k = key(pos);
   if (k === s.last) return;
   s.last = k;
+  const now = Date.now();
+  let raw = null;
   try {
-    const own = await store.getOwn();
-    await store.saveOwn(setProgress(own, s.seriesId, pos, Date.now()));
+    raw = JSON.stringify({ fileId: pos.fileId, page: pos.page, offset: pos.offset, updatedAt: now });
+    localStorage.setItem(BACKUP + s.seriesId, raw);
+  } catch { /* storage diblokir; IDB tetap dicoba */ }
+  try {
+    await store.updateOwn((own) => setProgress(own, s.seriesId, pos, now));
+    dropBackup(s.seriesId, raw);
     window.dispatchEvent(new CustomEvent('rak:changed'));
   } catch (e) {
     s.last = '';
