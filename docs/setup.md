@@ -1,0 +1,110 @@
+# Panduan setup Rak Buku
+
+Panduan ini untuk kamu yang memakai Windows dan iPhone. Semua akun di bawah gratis. Bagian 1 menyiapkan akun dan login. Bagian lain menyusul.
+
+Kamu akan memakai tiga layanan: Google Cloud (izin akses ke Drive), Cloudflare (server kecil untuk login) dan GitHub (tempat aplikasi di-host).
+
+## Bagian 1: login Google dan prototipe di iPhone
+
+### 1. Proyek Google Cloud
+
+1. Buka https://console.cloud.google.com dan masuk dengan akun Google yang Drive-nya mau dipakai.
+2. Buat proyek baru, misalnya dengan nama `rak-buku`.
+3. Di menu pencarian, ketik "Google Drive API", buka halamannya, lalu klik Enable.
+
+### 2. Layar persetujuan OAuth (consent screen)
+
+1. Cari menu "OAuth consent screen" (atau "Google Auth Platform", tergantung tampilan terbaru) di proyek yang tadi dibuat.
+2. Pilih tipe pengguna External. Isi nama aplikasi (`Rak Buku`), email dukungan, dan email kontak developer dengan emailmu.
+3. Di bagian scope, tambahkan hanya satu: `https://www.googleapis.com/auth/drive.file`. Dengan scope ini aplikasi hanya bisa melihat file yang ia buat sendiri, bukan seluruh Drive.
+4. Setelah selesai, status aplikasi masih Testing. Ubah ke In production lewat tombol Publish app.
+
+Langkah ke-4 penting. Selama berstatus Testing, Google membuat refresh token kedaluwarsa dalam 7 hari, jadi kamu harus login ulang tiap minggu. Di In production, token tidak kedaluwarsa begitu. Karena scope `drive.file` tidak termasuk sensitif, kamu tidak perlu verifikasi dari Google. Layar login akan menampilkan peringatan "Google hasn't verified this app". Itu normal untuk aplikasi pribadi. Klik Advanced, lalu lanjutkan.
+
+### 3. OAuth Client
+
+1. Buka menu Credentials (atau Clients), lalu buat OAuth client ID baru.
+2. Pilih tipe Web application, beri nama bebas.
+3. Authorized JavaScript origins dikosongkan saja.
+4. Di Authorized redirect URIs, isi:
+
+   `https://rak-buku-auth.<subdomain>.workers.dev/callback`
+
+   Ganti `<subdomain>` dengan subdomain workers.dev milikmu. Kamu baru tahu nilainya setelah membuat akun Cloudflare (bagian 4). Jadi boleh kembali ke langkah ini nanti dan mengisinya.
+5. Simpan. Salin Client ID dan Client secret. Keduanya dipakai di bagian 5. Jangan dibagikan ke siapa pun dan jangan ditaruh di file yang masuk ke GitHub.
+
+### 4. Akun Cloudflare dan deploy Worker
+
+1. Daftar di https://dash.cloudflare.com/sign-up dan verifikasi emailmu.
+2. Di dashboard, buka bagian Workers & Pages. Kamu akan diminta memilih subdomain workers.dev. Catat subdomain itu.
+3. Pasang Node.js (versi LTS) dari https://nodejs.org kalau belum ada.
+4. Buka PowerShell, lalu jalankan:
+
+   ```
+   cd D:\Projects\rak-buku\worker
+   npx wrangler login
+   ```
+
+   Browser akan terbuka. Klik izinkan.
+5. Buka `worker\wrangler.toml` dan ubah `APP_URL` menjadi alamat aplikasimu di GitHub Pages, yaitu `https://<username-github>.github.io/rak-buku/`. Pakai garis miring di akhir. Kalau kamu belum punya akun GitHub, kerjakan bagian 6 dulu.
+6. Deploy:
+
+   ```
+   npx wrangler deploy
+   ```
+
+   Hasilnya menampilkan alamat Worker, bentuknya `https://rak-buku-auth.<subdomain>.workers.dev`. Pastikan subdomain-nya sama dengan yang kamu pakai di redirect URI (bagian 3).
+
+### 5. Tiga secret
+
+Masih di folder `worker`, jalankan tiga perintah ini satu per satu. Tiap perintah akan meminta kamu menempelkan nilainya.
+
+```
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+npx wrangler secret put SEAL_KEY
+```
+
+Untuk GOOGLE_CLIENT_ID dan GOOGLE_CLIENT_SECRET, tempel nilai dari bagian 3.
+
+SEAL_KEY adalah kunci acak 32 byte untuk mengenkripsi token. Buat dengan perintah ini di PowerShell, lalu salin hasilnya:
+
+```
+$b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b)
+```
+
+Simpan kunci ini di tempat aman. Kalau kunci diganti, semua perangkat harus login ulang.
+
+### 6. Akun GitHub dan GitHub Pages
+
+1. Daftar di https://github.com kalau belum punya akun.
+2. Buat repositori baru bernama `rak-buku`. Public, karena Pages gratis untuk repositori publik.
+3. Unggah isi proyek ke repositori itu. Jangan ikutkan file rahasia apa pun.
+4. Di repositori, buka Settings, lalu Pages. Pilih sumber dari branch `main` dan simpan. Setelah satu-dua menit, alamatnya muncul, yaitu `https://<username-github>.github.io/rak-buku/`.
+
+Folder `spike/` ikut terunggah, dan bisa dibuka di `https://<username-github>.github.io/rak-buku/spike/`.
+
+### 7. Coba prototipe di iPhone
+
+Sebelum mengetes, buka `spike/index.html` dan ganti `WORKER_URL` di bagian atas script dengan alamat Worker-mu. Unggah ulang ke GitHub. Pastikan juga `APP_URL` di `wrangler.toml` mengarah ke halaman spike (`.../rak-buku/spike/`) selama tes ini, lalu jalankan `npx wrangler deploy` lagi. Setelah tes selesai, kembalikan ke alamat aplikasi.
+
+Tujuan tes: memastikan login Google bisa selesai di aplikasi layar utama iPhone, bukan terlempar ke tab Safari.
+
+1. Di iPhone, buka alamat spike di Safari.
+2. Ketuk tombol Share, lalu Add to Home Screen.
+3. Tutup Safari. Buka aplikasi dari ikon di layar utama.
+4. Cek tulisan "Mode standalone". Harus "ya". Kalau "tidak", kamu masih di Safari, jadi ulangi langkah 3.
+5. Ketuk Login Google, pilih akun, lalu setujui izinnya.
+6. Kamu akan kembali ke halaman spike. Yang diharapkan: kembali ke aplikasi layar utama, bukan ke tab Safari, dan status berubah jadi "sudah login".
+7. Ketuk Ambil token. Harus muncul "Token didapat, berlaku ... detik".
+8. Pilih satu file PDF, lalu ketuk Upload ke Drive. Harus muncul id file. Cek di drive.google.com bahwa file itu ada.
+9. Tutup aplikasi sepenuhnya (geser ke atas dari app switcher), buka lagi dari ikon, pilih PDF, lalu upload lagi tanpa menekan Login.
+
+Lulus kalau semuanya ini benar:
+
+- setelah login, aplikasi layar utama (bukan tab Safari) menerima hasil login,
+- Ambil token berhasil,
+- PDF muncul di Drive,
+- setelah aplikasi ditutup dan dibuka lagi, upload kedua berhasil tanpa login ulang.
+
+Yang perlu kamu laporkan: lulus atau gagal. Kalau gagal, di langkah mana, dan apa tulisan yang muncul di layar (pesan error di kotak abu-abu). Sebutkan juga versi iOS-mu.
