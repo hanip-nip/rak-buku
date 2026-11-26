@@ -49,13 +49,13 @@ async function load() {
   return mergeStates([own, ...remote.map((r) => r.state)], await store.deviceId());
 }
 
-async function mutate(fn) {
+async function mutate(fn, quiet) {
   await store.saveOwn(fn(await store.getOwn()));
-  changed();
+  if (!quiet) changed();
 }
 
 const fresh = async (id) => (await load()).series.find((x) => x.id === id);
-const save = (series) => { const now = Date.now(); return mutate((own) => upsertSeries(own, series, now)); };
+const save = (series, quiet) => { const now = Date.now(); return mutate((own) => upsertSeries(own, series, now), quiet); };
 
 function percent(s, p) {
   const i = s.files.findIndex((f) => f.id === p?.fileId);
@@ -186,13 +186,25 @@ async function addDialog(files) {
     let failed = '';
     if (ok.length) {
       // Ambil ulang: sync bisa mengubah seri selama pemrosesan.
-      const cur = (await fresh(base.id)) ?? base;
-      try {
-        await save(addFiles({ ...cur, cover: cur.cover || cover }, ok, Date.now()));
-        for (const f of ok) await store.outboxPut({ id: crypto.randomUUID(), type: 'upload', seriesId: base.id, fileId: f.id });
-      } catch {
+      const cur = target.value ? await fresh(base.id) : base;
+      if (!cur) {
         await Promise.all(ok.map((f) => undo(f.id)));
-        failed = 'Gagal menyimpan ke rak. Tidak ada file yang ditambahkan.';
+        failed = 'Seri ini sudah dihapus. File tidak ditambahkan.';
+      } else {
+        let saved = false;
+        try {
+          await save(addFiles({ ...cur, cover: cur.cover || cover }, ok, Date.now()), true);
+          saved = true;
+        } catch {
+          await Promise.all(ok.map((f) => undo(f.id)));
+          failed = 'Gagal menyimpan ke rak. Tidak ada file yang ditambahkan.';
+        }
+        if (saved) {
+          try {
+            for (const f of ok) await store.outboxPut({ id: crypto.randomUUID(), type: 'upload', seriesId: base.id, fileId: f.id });
+          } catch { failed = 'File tersimpan di HP, tapi antrean upload gagal. Coba buka ulang aplikasi.'; }
+          changed(); // setelah job antre, supaya sync melihatnya
+        }
       }
     }
     const msgs = bad.map((n) => `${n} tidak bisa dibuka`);
@@ -258,7 +270,8 @@ async function orderDialog(seriesId) {
 async function delSeries(s, close) {
   if (!confirm(`Hapus seri "${s.title}"? File di perangkat dan di Drive ikut dihapus.`)) return;
   close();
-  const cur = (await fresh(s.id)) ?? s;
+  const cur = await fresh(s.id);
+  if (!cur) return;
   // Urutan: tombstone dulu, baru job trash, baru blob; kalau terhenti di tengah, tidak ada data hilang diam-diam.
   await save({ ...cur, deleted: true });
   await store.outboxPut({
