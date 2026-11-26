@@ -1,6 +1,6 @@
 # Panduan setup Rak Buku
 
-Panduan ini untuk kamu yang memakai Windows dan iPhone. Semua akun di bawah gratis. Bagian 1 menyiapkan akun dan login. Bagian lain menyusul.
+Panduan ini untuk kamu yang memakai Windows dan iPhone. Semua akun di bawah gratis. Bagian 1 menyiapkan akun dan login. Bagian 2 menjelaskan cara memasang dan memakai aplikasinya.
 
 Kamu akan memakai tiga layanan: Google Cloud (izin akses ke Drive), Cloudflare (server kecil untuk login) dan GitHub (tempat aplikasi di-host).
 
@@ -108,3 +108,67 @@ Lulus kalau semuanya ini benar:
 - setelah aplikasi ditutup dan dibuka lagi, upload kedua berhasil tanpa login ulang.
 
 Yang perlu kamu laporkan: lulus atau gagal. Kalau gagal, di langkah mana, dan apa tulisan yang muncul di layar (pesan error di kotak abu-abu). Sebutkan juga versi iOS-mu.
+
+## Bagian 2: memasang dan memakai aplikasi
+
+### 8. Sebelum aplikasi dipakai
+
+Aplikasi belum bisa login kalau dua hal ini belum diisi:
+
+1. Di `src/config.js`, isi `WORKER_URL` dengan alamat Worker-mu (`https://rak-buku-auth.<subdomain>.workers.dev`).
+2. Di `worker\wrangler.toml`, `APP_URL` harus mengarah ke aplikasi yang asli (`https://<username-github>.github.io/rak-buku/`), bukan ke halaman spike. Setelah diubah, jalankan `npx wrangler deploy` lagi dari folder `worker`.
+
+Kamu bisa minta Claude yang mengedit dan mengirimnya ke GitHub. Claude akan meminta izin dulu sebelum push.
+
+### 9. Memasang di perangkat
+
+iPhone:
+
+1. Syaratnya iOS 17.4 atau lebih baru, karena mesin pembaca PDF-nya butuh versi itu. Cek di Settings, General, About, lihat baris iOS Version.
+2. Buka alamat aplikasi di Safari. Harus Safari, bukan browser lain.
+3. Ketuk tombol Share, lalu Add to Home Screen, lalu Add.
+4. Mulai sekarang selalu buka dari ikon di layar utama, jangan dari tab Safari. Penyimpanan keduanya terpisah, jadi buku yang kamu tambah lewat tab Safari tidak akan terlihat di ikon.
+
+Android:
+
+1. Buka alamat aplikasi di Chrome.
+2. Ketuk menu titik tiga, lalu Install app (atau Add to Home screen).
+
+PC:
+
+1. Buka alamat aplikasi di Chrome atau Edge.
+2. Klik ikon install di sisi kanan address bar, lalu Install.
+
+### 10. Pemakaian pertama
+
+1. Di bawah rak ada baris status. Ketuk Masuk dengan Google, pilih akun yang sama dengan yang dipakai di Google Cloud, lalu setujui izinnya.
+2. Untuk menambah buku, pakai tombol tambah, lalu pilih PDF dari aplikasi Files. Kalau satu seri komik terpecah jadi beberapa file (batch), pilih semuanya sekaligus supaya jadi satu seri. Pilih juga kategorinya.
+3. Tiap buku punya keterangan di kartunya:
+   - Ada di HP: semua bagian buku sudah tersimpan di perangkat ini dan bisa dibaca tanpa internet.
+   - Sebagian di HP: sebagian batch sudah ada, sisanya masih di Drive.
+   - Hanya di Drive: belum ada di perangkat ini. Perlu internet untuk membukanya.
+4. Saat kamu membuka buku dan sedang online, aplikasi mengunduh batch yang kamu buka plus 2 batch berikutnya.
+
+### 11. Peringatan penting
+
+- Menghapus ikon aplikasi di iPhone ikut menghapus buku yang tersimpan di HP. Salinan di Drive tetap aman, dan posisi bacamu aman kalau sudah tersinkron.
+- Buku yang masih di "antrean upload" hanya ada di HP itu sampai upload selesai. Kalau ikon terhapus sebelum itu, bukunya hilang. Saat pertama kali menambah komik besar, biarkan aplikasi terbuka di Wi-Fi sampai antreannya kosong.
+
+### 12. Memperbarui aplikasi
+
+Tutup aplikasi sepenuhnya (geser ke atas dari app switcher), lalu buka lagi. Kalau tampilannya belum berubah, ulangi sekali lagi. Versi baru baru dipakai setelah dibuka kedua kalinya.
+
+### 13. Tes di iPhone yang perlu kamu laporkan
+
+Beberapa hal hanya bisa dicek di perangkat asli. Coba empat ini dan laporkan lulus atau gagal, dengan keterangan kalau gagal:
+
+1. Cubit untuk zoom: taruh dua jari di layar dengan jeda sedikit (tidak persis bersamaan). Zoom harus tetap jalan.
+2. Buka satu batch berukuran sekitar 250 MB. Aplikasi tidak boleh crash.
+3. Gulir halaman, lalu langsung tutup aplikasi. Buka lagi, posisinya harus sama.
+4. Tambah satu buku di PC. Buka di iPhone, baca beberapa halaman. Lalu buka lagi di PC, bacanya harus lanjut dari posisi terakhir di iPhone.
+
+### 14. Kalau ada masalah
+
+- "Login ulang diperlukan": ketuk Masuk di baris status.
+- "Sinkron gagal": tidak perlu berbuat apa-apa. Aplikasi mencoba lagi sendiri. Pastikan saja internet menyala.
+- Pesan penyimpanan penuh: hapus buku yang sudah selesai dibaca dari perangkat lewat menu di kartunya, pilih "Hapus dari perangkat". File di Drive tidak ikut terhapus.
