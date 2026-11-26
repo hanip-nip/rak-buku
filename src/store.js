@@ -34,11 +34,13 @@ const deviceName = () => {
   return 'PC';
 };
 
-export async function deviceId() {
+let idp;
+// Memoized so parallel first-launch callers share one UUID.
+export const deviceId = () => (idp ??= (async () => {
   let id = await get('kv', 'deviceId');
   if (!id) { id = crypto.randomUUID(); await put('kv', id, 'deviceId'); }
   return id;
-}
+})().catch((e) => { idp = undefined; throw e; }));
 
 export async function getOwn() {
   return (await get('kv', 'own')) ?? newDeviceState(await deviceId(), deviceName());

@@ -23,11 +23,20 @@ export async function pageSizes(doc) {
   return sizes;
 }
 
-const tasks = new WeakMap();
+const states = new WeakMap(); // canvas -> {seq, task}
 
+// Resolves when drawn or superseded by a newer call on the same canvas.
 export async function renderPage(doc, pageNo, canvas, cssWidth, dpr) {
-  tasks.get(canvas)?.cancel();
+  let st = states.get(canvas);
+  if (!st) states.set(canvas, (st = { seq: 0, task: null }));
+  const my = ++st.seq;
   const page = await doc.getPage(pageNo);
+  if (my !== st.seq) return;
+  if (st.task) {
+    st.task.cancel();
+    await st.task.promise.catch(() => {});
+    if (my !== st.seq) return;
+  }
   const base = page.getViewport({ scale: 1 });
   let scale = (cssWidth * dpr) / base.width;
   const px = base.width * base.height * scale * scale;
@@ -36,8 +45,12 @@ export async function renderPage(doc, pageNo, canvas, cssWidth, dpr) {
   canvas.width = Math.floor(vp.width);
   canvas.height = Math.floor(vp.height);
   const task = page.render({ canvasContext: canvas.getContext('2d'), viewport: vp });
-  tasks.set(canvas, task);
-  return task.promise;
+  st.task = task;
+  try {
+    await task.promise;
+  } catch (e) {
+    if (e?.name !== 'RenderingCancelledException') throw e;
+  }
 }
 
 export async function outlinePages(doc) {
