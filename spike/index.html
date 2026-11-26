@@ -41,7 +41,9 @@ if (h.startsWith('#auth=')) {
   history.replaceState(null, '', location.pathname + location.search);
   log('Login berhasil, blob tersimpan.');
 } else if (h.startsWith('#auth-error=')) {
-  log('Login gagal: ' + decodeURIComponent(h.slice(12)));
+  let m = h.slice(12);
+  try { m = decodeURIComponent(m); } catch { m = 'pesan error tidak terbaca (' + m + ')'; }
+  log('Login gagal: ' + m);
   history.replaceState(null, '', location.pathname + location.search);
 }
 const refreshStatus = () => { $('status').textContent = localStorage.getItem(KEY) ? 'sudah login (blob ada)' : 'belum login'; };

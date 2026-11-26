@@ -30,10 +30,19 @@ Langkah ke-4 penting. Selama berstatus Testing, Google membuat refresh token ked
 
    `https://rak-buku-auth.<subdomain>.workers.dev/callback`
 
-   Ganti `<subdomain>` dengan subdomain workers.dev milikmu. Kamu baru tahu nilainya setelah membuat akun Cloudflare (bagian 4). Jadi boleh kembali ke langkah ini nanti dan mengisinya.
-5. Simpan. Salin Client ID dan Client secret. Keduanya dipakai di bagian 5. Jangan dibagikan ke siapa pun dan jangan ditaruh di file yang masuk ke GitHub.
+   Ganti `<subdomain>` dengan subdomain workers.dev milikmu. Kamu baru tahu nilainya setelah membuat akun Cloudflare (langkah 5). Jadi boleh kembali ke langkah ini nanti dan mengisinya.
+5. Simpan. Salin Client ID dan Client secret. Keduanya dipakai di langkah 6. Jangan dibagikan ke siapa pun dan jangan ditaruh di file yang masuk ke GitHub.
 
-### 4. Akun Cloudflare dan deploy Worker
+### 4. Akun GitHub dan GitHub Pages
+
+1. Daftar di https://github.com kalau belum punya akun. Catat username-mu, dipakai di langkah berikutnya.
+2. Buat repositori baru bernama `rak-buku`. Pilih Public, karena Pages gratis untuk repositori publik. Biarkan kosong: jangan centang README atau opsi tambahan lain.
+3. Minta Claude untuk mengirim (push) proyek ke repositori ini. Claude akan meminta izin dulu. Folder `.superpowers/` dan `contoh/` diabaikan git, jadi tidak ikut publik. Folder `worker/` dan `docs/` tidak berisi rahasia, karena secret disimpan di Cloudflare, bukan di file.
+4. Setelah proyek terkirim, di repositori buka Settings, lalu Pages. Pada Source pilih "Deploy from a branch", branch `main`, folder `/ (root)`, lalu Save. Setelah satu-dua menit, alamatnya muncul, yaitu `https://<username-github>.github.io/rak-buku/`.
+
+Folder `spike/` ikut terkirim, dan bisa dibuka di `https://<username-github>.github.io/rak-buku/spike/`.
+
+### 5. Akun Cloudflare dan deploy Worker
 
 1. Daftar di https://dash.cloudflare.com/sign-up dan verifikasi emailmu.
 2. Di dashboard, buka bagian Workers & Pages. Kamu akan diminta memilih subdomain workers.dev. Catat subdomain itu.
@@ -46,16 +55,16 @@ Langkah ke-4 penting. Selama berstatus Testing, Google membuat refresh token ked
    ```
 
    Browser akan terbuka. Klik izinkan.
-5. Buka `worker\wrangler.toml` dan ubah `APP_URL` menjadi alamat aplikasimu di GitHub Pages, yaitu `https://<username-github>.github.io/rak-buku/`. Pakai garis miring di akhir. Kalau kamu belum punya akun GitHub, kerjakan bagian 6 dulu.
+5. Buka `worker\wrangler.toml` dan ubah `APP_URL` menjadi alamat aplikasimu di GitHub Pages, yaitu `https://<username-github>.github.io/rak-buku/`. Pakai garis miring di akhir.
 6. Deploy:
 
    ```
    npx wrangler deploy
    ```
 
-   Hasilnya menampilkan alamat Worker, bentuknya `https://rak-buku-auth.<subdomain>.workers.dev`. Pastikan subdomain-nya sama dengan yang kamu pakai di redirect URI (bagian 3).
+   Hasilnya menampilkan alamat Worker, bentuknya `https://rak-buku-auth.<subdomain>.workers.dev`. Pastikan subdomain-nya sama dengan yang kamu pakai di redirect URI (langkah 3).
 
-### 5. Tiga secret
+### 6. Tiga secret
 
 Masih di folder `worker`, jalankan tiga perintah ini satu per satu. Tiap perintah akan meminta kamu menempelkan nilainya.
 
@@ -65,7 +74,7 @@ npx wrangler secret put GOOGLE_CLIENT_SECRET
 npx wrangler secret put SEAL_KEY
 ```
 
-Untuk GOOGLE_CLIENT_ID dan GOOGLE_CLIENT_SECRET, tempel nilai dari bagian 3.
+Untuk GOOGLE_CLIENT_ID dan GOOGLE_CLIENT_SECRET, tempel nilai dari langkah 3.
 
 SEAL_KEY adalah kunci acak 32 byte untuk mengenkripsi token. Buat dengan perintah ini di PowerShell, lalu salin hasilnya:
 
@@ -75,18 +84,9 @@ $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create
 
 Simpan kunci ini di tempat aman. Kalau kunci diganti, semua perangkat harus login ulang.
 
-### 6. Akun GitHub dan GitHub Pages
-
-1. Daftar di https://github.com kalau belum punya akun.
-2. Buat repositori baru bernama `rak-buku`. Public, karena Pages gratis untuk repositori publik.
-3. Unggah isi proyek ke repositori itu. Jangan ikutkan file rahasia apa pun.
-4. Di repositori, buka Settings, lalu Pages. Pilih sumber dari branch `main` dan simpan. Setelah satu-dua menit, alamatnya muncul, yaitu `https://<username-github>.github.io/rak-buku/`.
-
-Folder `spike/` ikut terunggah, dan bisa dibuka di `https://<username-github>.github.io/rak-buku/spike/`.
-
 ### 7. Coba prototipe di iPhone
 
-Sebelum mengetes, buka `spike/index.html` dan ganti `WORKER_URL` di bagian atas script dengan alamat Worker-mu. Unggah ulang ke GitHub. Pastikan juga `APP_URL` di `wrangler.toml` mengarah ke halaman spike (`.../rak-buku/spike/`) selama tes ini, lalu jalankan `npx wrangler deploy` lagi. Setelah tes selesai, kembalikan ke alamat aplikasi.
+Sebelum mengetes, buka `spike/index.html` dan ganti `WORKER_URL` di bagian atas script dengan alamat Worker-mu. Minta Claude mengirim perubahan ini ke GitHub. Pastikan juga `APP_URL` di `wrangler.toml` mengarah ke halaman spike (`.../rak-buku/spike/`) selama tes ini, lalu jalankan `npx wrangler deploy` lagi. Setelah tes selesai, kembalikan ke alamat aplikasi.
 
 Tujuan tes: memastikan login Google bisa selesai di aplikasi layar utama iPhone, bukan terlempar ke tab Safari.
 
