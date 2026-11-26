@@ -1,4 +1,5 @@
-const VERSION = 'v4';
+// Tiap deploy yang mengubah file aplikasi mana pun WAJIB menaikkan VERSION, kalau tidak perangkat tetap memakai cache lama.
+const VERSION = 'v5';
 const CACHE = `rak-buku-${VERSION}`;
 const FILES = [
   './', 'index.html', 'app.css', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png',
@@ -9,7 +10,7 @@ const FILES = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES.map((f) => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {

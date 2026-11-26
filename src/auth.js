@@ -6,24 +6,35 @@ export class ReloginError extends Error {
 }
 
 // deps bisa diganti di tes (store memakai IndexedDB).
-export const deps = { getAuth: store.getAuth, setAuth: store.setAuth };
+export const deps = { getAuth: store.getAuth, setAuth: store.setAuth, storage: () => localStorage };
+const STATE_KEY = 'rak-oauth-state';
 
 let cache = null; // {token, exp}
 let inflight = null;
 let gen = 0; // naik tiap cache dibuang; fetch lama tak boleh mengisi cache lagi
 export const _reset = () => { gen++; cache = null; inflight = null; };
 
-export const login = () => { location.href = `${WORKER_URL}/login`; };
+// Nonce state (anti login-CSRF): hanya hasil login yang dimulai dari perangkat ini yang diterima.
+export function login() {
+  const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  try { deps.storage().setItem(STATE_KEY, nonce); } catch { /* storage diblokir: hasil login akan ditolak */ }
+  location.href = `${WORKER_URL}/login?state=${nonce}`;
+}
 export const isLoggedIn = async () => (await deps.getAuth()) != null;
 export async function logout() { _reset(); await deps.setAuth(null); }
 
 export async function takeAuthFromHash() {
-  const m = /^#(auth|auth-error)=(.*)$/.exec(location.hash);
+  const m = /^#(auth|auth-error)=([^&]*)(?:&state=([^&]*))?$/.exec(location.hash);
   if (!m) return { taken: false };
   history.replaceState(null, '', location.pathname + location.search);
   let val;
   try { val = decodeURIComponent(m[2]); } catch { val = null; }
-  if (m[1] === 'auth' && val) {
+  if (m[1] === 'auth') {
+    let saved = null;
+    try { saved = deps.storage().getItem(STATE_KEY); } catch { /* storage diblokir */ }
+    if (!val || !saved || m[3] !== saved) return { taken: false, error: 'Login ditolak (tautan tidak valid)' };
+    try { deps.storage().removeItem(STATE_KEY); } catch { /* storage diblokir */ }
     await deps.setAuth(val);
     _reset();
     return { taken: true };

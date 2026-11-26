@@ -4,11 +4,12 @@ import * as auth from '../src/auth.js';
 import * as drive from '../src/drive.js';
 
 const json = (o, status = 200, headers = {}) => new Response(JSON.stringify(o), { status, headers });
-let calls, blob, kv;
+let calls, blob, kv, ls;
 const stub = (fn) => { globalThis.fetch = async (url, init = {}) => { calls.push({ url: String(url), init }); return fn(String(url), init); }; };
 
 beforeEach(() => {
-  calls = []; blob = 'sealed'; kv = {};
+  calls = []; blob = 'sealed'; kv = {}; ls = new Map();
+  auth.deps.storage = () => ({ getItem: (k) => ls.get(k) ?? null, setItem: (k, v) => ls.set(k, v), removeItem: (k) => ls.delete(k) });
   auth._reset();
   auth.deps.getAuth = async () => blob;
   auth.deps.setAuth = async (b) => { blob = b; };
@@ -52,16 +53,38 @@ test('getToken bersamaan hanya satu fetch', async () => {
   assert.equal(calls.length, 1);
 });
 
-test('takeAuthFromHash mengambil auth dan membersihkan hash', async () => {
-  globalThis.location = { hash: '#auth=a%2Bb', pathname: '/x', search: '' };
+test('takeAuthFromHash mengambil auth (state cocok) dan membersihkan hash', async () => {
+  ls.set('rak-oauth-state', 'N1');
+  globalThis.location = { hash: '#auth=a%2Bb&state=N1', pathname: '/x', search: '' };
   let replaced; globalThis.history = { replaceState: (...a) => { replaced = a; } };
   assert.deepEqual(await auth.takeAuthFromHash(), { taken: true });
   assert.equal(blob, 'a+b');
   assert.equal(replaced[2], '/x');
-  globalThis.location.hash = '#auth-error=nope';
+  assert.equal(ls.has('rak-oauth-state'), false, 'nonce dipakai sekali');
+  globalThis.location.hash = '#auth-error=nope&state=N1';
   assert.deepEqual(await auth.takeAuthFromHash(), { taken: false, error: 'nope' });
   globalThis.location.hash = '#/baca/1';
   assert.deepEqual(await auth.takeAuthFromHash(), { taken: false });
+});
+
+test('takeAuthFromHash menolak blob tanpa state, state salah, atau tanpa nonce tersimpan', async () => {
+  globalThis.history = { replaceState: () => {} };
+  const rejected = { taken: false, error: 'Login ditolak (tautan tidak valid)' };
+  for (const [hash, saved] of [['#auth=evil', 'N1'], ['#auth=evil&state=N2', 'N1'], ['#auth=evil&state=N1', null]]) {
+    ls.clear();
+    if (saved) ls.set('rak-oauth-state', saved);
+    globalThis.location = { hash, pathname: '/', search: '' };
+    assert.deepEqual(await auth.takeAuthFromHash(), rejected, hash);
+    assert.equal(blob, 'sealed', 'akun tidak tertukar');
+  }
+});
+
+test('login menyimpan nonce base64url dan mengirimnya sebagai state', () => {
+  globalThis.location = { href: '' };
+  auth.login();
+  const n = ls.get('rak-oauth-state');
+  assert.match(n, /^[A-Za-z0-9_-]{22}$/);
+  assert.ok(globalThis.location.href.endsWith(`/login?state=${n}`));
 });
 
 test('listStatus mengirim q dengan folder dan trashed=false', async () => {

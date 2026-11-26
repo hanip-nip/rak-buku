@@ -40,20 +40,30 @@ test('/token mengembalikan 401 relogin saat Google membalas invalid_grant', asyn
   assert.deepEqual(await res.json(), { error: 'relogin' });
 });
 
-test('/callback redirect ke APP_URL#auth=<blob yang bisa di-unseal>', async () => {
+test('/callback redirect ke APP_URL#auth=<blob yang bisa di-unseal>&state=<nonce>', async () => {
   stub(200, { access_token: 'AT', refresh_token: '1//newrefresh' });
-  const res = await worker.fetch(new Request(W + '/callback?code=abc'), env);
+  const res = await worker.fetch(new Request(W + '/callback?code=abc&state=Ab-_9'), env);
   assert.equal(res.status, 302);
-  const loc = res.headers.get('location');
-  assert.ok(loc.startsWith(APP_URL + '#auth='));
-  assert.equal(await unseal(loc.slice((APP_URL + '#auth=').length), SEAL_KEY), '1//newrefresh');
+  const m = /^#auth=([^&]+)&state=Ab-_9$/.exec(res.headers.get('location').slice(APP_URL.length));
+  assert.ok(m);
+  assert.equal(await unseal(m[1], SEAL_KEY), '1//newrefresh');
 });
 
-test('/callback gagal redirect ke #auth-error', async () => {
+test('/callback gagal redirect ke #auth-error dengan state', async () => {
   stub(400, { error: 'invalid_grant' });
-  const res = await worker.fetch(new Request(W + '/callback?code=abc'), env);
+  const res = await worker.fetch(new Request(W + '/callback?code=abc&state=N1'), env);
   assert.equal(res.status, 302);
-  assert.ok(res.headers.get('location').startsWith(APP_URL + '#auth-error='));
+  assert.equal(res.headers.get('location'), APP_URL + '#auth-error=invalid_grant&state=N1');
+});
+
+test('state yang tidak valid tidak diteruskan', async () => {
+  stub(200, { access_token: 'AT', refresh_token: 'r' });
+  for (const bad of ['a%26auth%3Dx', 'x'.repeat(65), 'a.b']) {
+    const res = await worker.fetch(new Request(W + `/callback?code=abc&state=${bad}`), env);
+    assert.ok(!res.headers.get('location').includes('state='), bad);
+    const login = await worker.fetch(new Request(W + `/login?state=${bad}`), env);
+    assert.equal(new URL(login.headers.get('location')).searchParams.get('state'), null, bad);
+  }
 });
 
 test('/login redirect ke Google dengan access_type=offline dan scope drive.file', async () => {
@@ -66,6 +76,8 @@ test('/login redirect ke Google dengan access_type=offline dan scope drive.file'
   assert.equal(u.searchParams.get('response_type'), 'code');
   assert.equal(u.searchParams.get('scope'), 'https://www.googleapis.com/auth/drive.file');
   assert.equal(u.searchParams.get('redirect_uri'), W + '/callback');
+  const s = await worker.fetch(new Request(W + '/login?state=N1'), env);
+  assert.equal(new URL(s.headers.get('location')).searchParams.get('state'), 'N1');
 });
 
 test('OPTIONS dari origin lain tidak mendapat header CORS', async () => {

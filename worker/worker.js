@@ -1,6 +1,8 @@
 import { seal, unseal } from './seal.js';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+// state dari aplikasi (nonce base64url) diteruskan ke Google dan dikembalikan; selain bentuk ini dibuang.
+const stateOf = (url) => { const s = url.searchParams.get('state'); return s && /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : ''; };
 
 const google = (env, params) =>
   fetch(TOKEN_URL, {
@@ -17,7 +19,8 @@ export default {
       ? { 'access-control-allow-origin': appOrigin, 'access-control-allow-methods': 'POST, OPTIONS', 'access-control-allow-headers': 'content-type', vary: 'Origin' }
       : {};
     const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json', ...cors } });
-    const back = (hash) => Response.redirect(env.APP_URL + hash, 302);
+    const state = stateOf(url);
+    const back = (hash) => Response.redirect(env.APP_URL + hash + (state ? '&state=' + state : ''), 302);
 
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
 
@@ -29,6 +32,7 @@ export default {
         scope: 'https://www.googleapis.com/auth/drive.file',
         access_type: 'offline',
         prompt: 'consent',
+        ...(state && { state }),
       });
       return Response.redirect('https://accounts.google.com/o/oauth2/v2/auth?' + q, 302);
     }

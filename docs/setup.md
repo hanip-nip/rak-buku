@@ -120,6 +120,8 @@ Aplikasi belum bisa login kalau dua hal ini belum diisi:
 
 Kamu bisa minta Claude yang mengedit dan mengirimnya ke GitHub. Claude akan meminta izin dulu sebelum push.
 
+Siapa pun yang mengirim (push) perubahan file aplikasi, termasuk `src/config.js` ini, wajib menaikkan `VERSION` di baris atas `sw.js` (misalnya `v5` jadi `v6`). Tanpa itu, perangkat yang sudah memasang aplikasi tetap memakai salinan lama. Setelah push, tunggu beberapa menit sebelum mengetes, karena GitHub Pages butuh waktu untuk memperbarui cache-nya.
+
 ### 9. Memasang di perangkat
 
 iPhone:
@@ -141,7 +143,7 @@ PC:
 
 ### 10. Pemakaian pertama
 
-1. Di bawah rak ada baris status. Ketuk Masuk dengan Google, pilih akun yang sama dengan yang dipakai di Google Cloud, lalu setujui izinnya.
+1. Di bawah rak ada baris status bertuliskan "Belum masuk Google" dengan tombol Masuk. Ketuk Masuk, pilih akun yang sama dengan yang dipakai di Google Cloud, lalu setujui izinnya.
 2. Untuk menambah buku, pakai tombol tambah, lalu pilih PDF dari aplikasi Files. Kalau satu seri komik terpecah jadi beberapa file (batch), pilih semuanya sekaligus supaya jadi satu seri. Pilih juga kategorinya.
 3. Tiap buku punya keterangan di kartunya:
    - Ada di HP: semua bagian buku sudah tersimpan di perangkat ini dan bisa dibaca tanpa internet.
@@ -156,19 +158,23 @@ PC:
 
 ### 12. Memperbarui aplikasi
 
+Tiap pembaruan harus disertai kenaikan `VERSION` di `sw.js` oleh orang yang melakukan push (lihat langkah 8). Setelah push, tunggu beberapa menit dulu (cache GitHub Pages), baru lakukan langkah di bawah.
+
 Tutup aplikasi sepenuhnya (geser ke atas dari app switcher), lalu buka lagi. Kalau tampilannya belum berubah, ulangi sekali lagi. Versi baru baru dipakai setelah dibuka kedua kalinya.
 
 ### 13. Tes di iPhone yang perlu kamu laporkan
 
-Beberapa hal hanya bisa dicek di perangkat asli. Coba empat ini dan laporkan lulus atau gagal, dengan keterangan kalau gagal:
+Beberapa hal hanya bisa dicek di perangkat asli. Coba enam ini dan laporkan lulus atau gagal, dengan keterangan kalau gagal:
 
 1. Cubit untuk zoom: taruh dua jari di layar dengan jeda sedikit (tidak persis bersamaan). Zoom harus tetap jalan.
 2. Buka satu batch berukuran sekitar 250 MB. Aplikasi tidak boleh crash.
 3. Gulir halaman, lalu langsung tutup aplikasi. Buka lagi, posisinya harus sama.
 4. Tambah satu buku di PC. Buka di iPhone, baca beberapa halaman. Lalu buka lagi di PC, bacanya harus lanjut dari posisi terakhir di iPhone.
+5. Download sambil membaca: buka seri yang hanya ada di Drive, lalu terus baca batch pertama selagi batch berikutnya ter-download. Bacaan tidak boleh melompat atau macet, dan batch berikutnya harus bisa dibaca setelah selesai.
+6. Zoom 4x pada seri yang punya 6 batch atau lebih di perangkat. Gulir sampai ke batch-batch berikutnya; semua halaman harus tetap bisa dicapai.
 
 ### 14. Kalau ada masalah
 
 - "Login ulang diperlukan": ketuk Masuk di baris status.
-- "Sinkron gagal": tidak perlu berbuat apa-apa. Aplikasi mencoba lagi sendiri. Pastikan saja internet menyala.
+- "Sinkron gagal, dicoba lagi nanti": tidak perlu berbuat apa-apa. Aplikasi mencoba lagi saat dibuka ulang, saat internet tersambung kembali, setelah kamu mengubah sesuatu di rak, dan tiap 30 detik selama sedang membaca. Pastikan saja internet menyala.
 - Pesan penyimpanan penuh: hapus buku yang sudah selesai dibaca dari perangkat lewat menu di kartunya, pilih "Hapus dari perangkat". File di Drive tidak ikut terhapus.
