@@ -43,3 +43,18 @@ label > * { margin-top: 4px; }
 .sheet-back { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; justify-content: center; z-index: 10; }
 .sheet { background: var(--bg); width: 100%; max-width: 520px; max-height: 85vh; overflow: auto; border-radius: 16px 16px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); display: grid; gap: 8px; }
 .sheet h2 { margin: 0; font-size: 17px; }
+
+.reader { min-height: 100vh; }
+.rpages { position: relative; margin: 0 auto; }
+.rslot { position: absolute; left: 0; right: 0; background: var(--line); }
+.rslot canvas { display: block; width: 100%; height: 100%; }
+.rmissing, .reader-msg { padding: 24px 16px; text-align: center; }
+.reader-msg { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+.rbar { position: fixed; left: 0; right: 0; z-index: 5; display: flex; gap: 8px; align-items: center; padding: 8px; background: var(--card); transition: transform .2s, visibility .2s; visibility: hidden; }
+.rtop { top: 0; padding-top: calc(8px + env(safe-area-inset-top)); border-bottom: 1px solid var(--line); transform: translateY(-100%); }
+.rbottom { bottom: 0; padding-bottom: calc(8px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); transform: translateY(100%); justify-content: space-around; }
+.reader.bars .rbar { transform: none; visibility: visible; }
+.rtitle { flex: 1; min-width: 0; display: grid; }
+.rtitle strong, .rpos { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rpos { color: var(--muted); font-size: 13px; }
+.rbottom button { flex: 1; padding: 8px 4px; font-size: 13px; }

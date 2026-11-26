@@ -9,7 +9,7 @@ const ui = { tab: 'semua', q: '' };
 let els = null; // {list, tabs, foot}; null kalau rak belum pernah tampil
 let seq = 0;
 
-function h(tag, props = {}, ...kids) {
+export function h(tag, props = {}, ...kids) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
     if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
@@ -43,7 +43,7 @@ export const guessTitle = (name) => {
   return s || bare;
 };
 
-async function load() {
+export async function load() {
   const own = await store.getOwn();
   const remote = Object.values(await store.getRemote());
   return mergeStates([own, ...remote.map((r) => r.state)], await store.deviceId());
