@@ -63,6 +63,8 @@ export async function updateOwn(fn) {
     tx.onabort = () => rej(tx.error ?? new Error('transaksi dibatalkan'));
   });
 }
+export const getKv = (k) => get('kv', k);
+export const setKv = (k, v) => put('kv', v, k);
 export const getMerged = () => get('kv', 'merged');
 export const saveMerged = (m) => put('kv', m, 'merged');
 export const getRemote = async () => (await get('kv', 'remote')) ?? {};

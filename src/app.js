@@ -31,6 +31,7 @@ function route() {
 }
 
 takeAuthHash();
+store.getKv('theme').then((t) => { if (t) document.documentElement.dataset.theme = t; }).catch(() => {});
 navigator.storage?.persist?.();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 window.addEventListener('hashchange', route);

@@ -21,7 +21,7 @@ export function h(tag, props = {}, ...kids) {
 }
 
 // Sheet sederhana; mengembalikan fungsi tutup.
-function sheet(title, ...body) {
+export function sheet(title, ...body) {
   const close = () => back.remove();
   const back = h('div', { className: 'sheet-back', onclick: (e) => { if (e.target === back) close(); } },
     h('div', { className: 'sheet', role: 'dialog' }, h('h2', {}, title), ...body));

@@ -3,6 +3,7 @@ import { openPdf, renderPage } from './pdf.js';
 import { setProgress } from './state.js';
 import { buildLayout, positionAt, scrollTopFor, visibleRange } from './layout.js';
 import { load, h } from './library.js';
+import * as panels from './reader-panels.js';
 
 const GAP = 8;
 const MAX_LIVE_PX = 48e6; // R9: batas total piksel kanvas hidup
@@ -53,8 +54,9 @@ export async function open(seriesId) {
   for (const f of s.files) {
     const meta = (await store.hasBlob(f.id)) ? await store.getMeta(f.id) : null;
     if (!meta?.sizes?.length) break;
-    files.push({ id: f.id, sizes: meta.sizes });
+    files.push({ id: f.id, sizes: meta.sizes, outline: meta.outline ?? [] });
   }
+  const invert = await store.getKv(`invert:${seriesId}`).catch(() => false);
   if (my !== gen) return;
   const word = s.files.some((f) => /batch/i.test(f.name)) ? 'Batch' : 'Bagian';
   const missText = `${word} ${files.length + 1} belum ada di perangkat. Sambungkan internet untuk men-download.`;
@@ -63,15 +65,20 @@ export async function open(seriesId) {
 
   const posEl = h('span', { className: 'rpos' });
   const spacer = h('div', { className: 'rpages' });
-  const root = h('div', { className: 'reader' }, spacer,
+  const acts = {
+    toc: () => panel(ses, panels.toc), bookmark: () => panel(ses, panels.bookmarks),
+    night: () => panel(ses, panels.night), zoom: () => { if (ses.zoom !== 1) setZoom(ses, 1); },
+  };
+  const root = h('div', { className: `reader${invert ? ' invert' : ''}` }, spacer,
     files.length < s.files.length ? h('p', { className: 'rmissing' }, missText) : null,
     h('header', { className: 'rbar rtop' },
       h('button', { 'aria-label': 'Kembali', onclick: back }, '←'),
       h('div', { className: 'rtitle' }, h('strong', {}, s.title), posEl)),
     h('nav', { className: 'rbar rbottom' }, ...[['toc', 'Daftar isi'], ['bookmark', 'Bookmark'], ['night', 'Malam'], ['zoom', 'Zoom']]
-      .map(([k, t]) => h('button', { 'data-act': k, 'aria-label': t }, t))));
+      .map(([k, t]) => h('button', { 'data-act': k, onclick: acts[k] }, t))));
   const ses = r = {
-    seriesId, word, files, multi: s.files.length > 1, root, spacer, posEl, zoom: 1,
+    seriesId, word, files, all: s.files, multi: s.files.length > 1, root, spacer, posEl, zoom: 1,
+    zoomBtn: root.querySelector('[data-act="zoom"]'), panel: null,
     slots: new Map(), docs: new Map(), L: null, W: 0, y0: 0, dpr: 1, last: '', timer: 0, raf: 0, busy: false, lastScroll: 0, offs: [],
   };
   history.scrollRestoration = 'manual';
@@ -90,6 +97,7 @@ export function close() {
   if (!s) return;
   const pos = currentPos(s);
   r = null;
+  s.panel?.();
   for (const off of s.offs) off();
   clearTimeout(s.timer);
   cancelAnimationFrame(s.raf);
@@ -109,6 +117,46 @@ function layoutPages(s) {
   s.spacer.style.height = `${s.L.total}px`;
   for (const i of [...s.slots.keys()]) drop(s, i);
   s.y0 = s.spacer.getBoundingClientRect().top + window.scrollY;
+}
+
+// Panel (bottom sheet) menempel di body; satu yang terbuka per sesi.
+function panel(s, fn) {
+  s.panel?.();
+  s.panel = fn(s, { here: () => currentPos(s), jump: (pos) => window.scrollTo(window.scrollX, s.y0 + scrollTopFor(s.L, pos)) });
+}
+
+// Bangun ulang layout di zoom z lalu pulihkan pos; `at` = {cx, mx} menjaga titik tengah cubitan secara horizontal.
+function setZoom(s, z, pos = currentPos(s), at = null) {
+  const k = z / s.zoom;
+  s.zoom = z;
+  s.spacer.style.transform = '';
+  layoutPages(s);
+  const left = s.spacer.getBoundingClientRect().left + window.scrollX;
+  window.scrollTo(at ? left + at.cx * k - at.mx : 0, s.y0 + (pos ? scrollTopFor(s.L, pos) : 0));
+  s.zoomBtn.textContent = z === 1 ? 'Zoom' : `Zoom ${Math.round(z * 100)}%`;
+  update(s);
+}
+
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const two = (ptrs) => { const [a, b] = ptrs.values(); return { a, b, d: Math.hypot(a.x - b.x, a.y - b.y) }; };
+
+function startPinch(s, ptrs) {
+  const { a, b, d } = two(ptrs);
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  const rect = s.spacer.getBoundingClientRect();
+  s.spacer.style.transformOrigin = `${mx - rect.left}px ${my - rect.top}px`;
+  return { d0: d || 1, k: 1, pos: currentPos(s), cx: mx - rect.left, mx };
+}
+
+function movePinch(s, p, ptrs) {
+  p.k = clamp(two(ptrs).d / p.d0, 1 / s.zoom, 4 / s.zoom);
+  s.spacer.style.transform = `scale(${p.k})`;
+}
+
+function endPinch(s, p) {
+  const z = clamp(s.zoom * p.k, 1, 4);
+  if (Math.abs(z - s.zoom) < 0.01) s.spacer.style.transform = '';
+  else setZoom(s, z, p.pos, p);
 }
 
 const currentPos = (s) => positionAt(s.L, Math.max(0, window.scrollY - s.y0));
@@ -153,20 +201,50 @@ function listen(s) {
   });
   on(window, 'pagehide', () => saveNow(s));
   on(document, 'visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow(s); });
+  // Pointer dilacak per pointerId (up/cancel di window, supaya slot yang dibuang tidak meninggalkan entri basi).
   // Ketuk tunggal: tanpa geser > 10 px, < 300 ms, satu jari, bukan saat scroll/momentum.
-  let tap = null, fingers = 0;
+  const ptrs = new Map();
+  let tap = null, pinch = null, lastTap = null, tapTimer = 0;
+  const toggle = () => s.root.classList.toggle('bars');
+  s.offs.push(() => clearTimeout(tapTimer));
   on(s.root, 'pointerdown', (e) => {
-    fingers++;
+    if (e.target.closest('.rbar')) return;
+    if (e.isPrimary) ptrs.clear();
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const now = performance.now();
-    tap = fingers === 1 && !e.target.closest('.rbar') && now - s.lastScroll > 150 ? { x: e.clientX, y: e.clientY, t: now, sy: window.scrollY } : null;
+    tap = ptrs.size === 1 && now - s.lastScroll > 150 ? { x: e.clientX, y: e.clientY, t: now, sx: window.scrollX, sy: window.scrollY } : null;
+    if (ptrs.size === 2) pinch = startPinch(s, ptrs);
   });
-  on(s.root, 'pointermove', (e) => { if (tap && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > 10) tap = null; });
-  on(s.root, 'pointerup', () => {
-    fingers = Math.max(0, fingers - 1);
-    if (tap && performance.now() - tap.t < 300 && Math.abs(window.scrollY - tap.sy) < 2) s.root.classList.toggle('bars');
+  on(window, 'pointermove', (e) => {
+    const p = ptrs.get(e.pointerId);
+    if (!p) return;
+    p.x = e.clientX; p.y = e.clientY;
+    if (tap && Math.hypot(p.x - tap.x, p.y - tap.y) > 10) tap = null;
+    if (pinch && ptrs.size >= 2) movePinch(s, pinch, ptrs);
+  });
+  const end = (e, up) => {
+    if (!ptrs.delete(e.pointerId)) return;
+    if (pinch) {
+      if (ptrs.size < 2) { endPinch(s, pinch); pinch = null; }
+    } else if (up && tap && performance.now() - tap.t < 300 && Math.abs(window.scrollY - tap.sy) < 2 && Math.abs(window.scrollX - tap.sx) < 2) {
+      // Ketuk dua kali (< 300 ms, < 25 px) = zoom 1. Saat zoom > 1 ketuk tunggal ditunda agar tidak berkedip.
+      const now = performance.now();
+      if (lastTap && now - lastTap.t < 300 && Math.hypot(tap.x - lastTap.x, tap.y - lastTap.y) < 25) {
+        lastTap = null;
+        clearTimeout(tapTimer);
+        if (s.zoom !== 1) setZoom(s, 1);
+      } else {
+        lastTap = { x: tap.x, y: tap.y, t: now };
+        if (s.zoom === 1) toggle(); else tapTimer = setTimeout(toggle, 300);
+      }
+    }
     tap = null;
-  });
-  on(s.root, 'pointercancel', () => { fingers = Math.max(0, fingers - 1); tap = null; });
+  };
+  on(window, 'pointerup', (e) => end(e, true));
+  on(window, 'pointercancel', (e) => end(e, false));
+  // Cegah zoom/geser bawaan browser saat dua jari; cubit ditangani sendiri.
+  on(s.root, 'touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+  on(document, 'gesturestart', (e) => e.preventDefault());
 }
 
 function update(s) {
@@ -188,7 +266,7 @@ function update(s) {
   }
   // dpr diturunkan seperempat-seperempat supaya tidak memicu render ulang untuk selisih kecil.
   const want = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(MAX_LIVE_PX / (area || 1)));
-  s.dpr = Math.max(1, Math.floor(want * 4) / 4);
+  s.dpr = Math.max(0.25, Math.floor(want * 4) / 4); // < 1 hanya saat zoom besar, agar anggaran tetap terjaga
   showPos(s, y);
   pump(s);
 }
