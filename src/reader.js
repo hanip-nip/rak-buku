@@ -17,7 +17,7 @@ let pending = null; // pesan "belum ada" yang tampil tanpa sesi: {el, word, n, i
 const offText = (word, n) => `${word} ${n} belum ada di perangkat. Sambungkan internet untuk men-download.`;
 // File yang akan di-download sync: online -> "Sedang men-download", offline -> minta internet.
 const missText = (word, n, id) => {
-  if (dl?.fileId === id && dl.size) return `Sedang men-download ${word} ${n}… (${Math.floor((dl.got / dl.size) * 100)}%)`;
+  if (dl && id && dl.fileId === id && dl.size) return `Sedang men-download ${word} ${n}… (${Math.floor((dl.got / dl.size) * 100)}%)`;
   return navigator.onLine ? `Sedang men-download ${word} ${n}…` : offText(word, n);
 };
 
@@ -172,9 +172,9 @@ async function localRun(all, at) {
 function setMiss(s) {
   const hi = s.lo + s.files.length, runHi = s.runLo + s.run.length;
   s.topMiss.hidden = s.lo > s.runLo || s.runLo === 0;
-  s.topMiss.textContent = offText(s.word, s.runLo);
+  if (!s.topMiss.hidden) s.topMiss.textContent = offText(s.word, s.runLo);
   s.botMiss.hidden = hi < runHi || runHi === s.all.length;
-  s.botMiss.textContent = missText(s.word, runHi + 1, s.all[runHi]?.id);
+  if (!s.botMiss.hidden) s.botMiss.textContent = missText(s.word, runHi + 1, s.all[runHi].id);
 }
 
 const idxOf = (s, pos) => (pos ? s.all.findIndex((f) => f.id === pos.fileId) : s.lo);
