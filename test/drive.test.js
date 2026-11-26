@@ -189,5 +189,6 @@ test('downloadRange mengirim header Range dan menuntut 206', async () => {
   assert.equal(calls[0].init.headers.Range, 'bytes=8-10');
   assert.match(calls[0].url, /files\/I\?alt=media/);
   stub(() => new Response('semua', { status: 200 }));
-  await assert.rejects(drive.downloadRange('TK', 'I', 0, 4), (e) => e.status === 200);
+  assert.equal(await (await drive.downloadRange('TK', 'I', 0, 4)).text(), 'semua'); // file kecil utuh
+  await assert.rejects(drive.downloadRange('TK', 'I', 5, 9), (e) => e.status === 200);
 });

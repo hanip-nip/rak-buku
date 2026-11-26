@@ -54,17 +54,13 @@ export async function open(seriesId) {
   } else if (raw != null) dropBackup(seriesId, raw);
   if (!s) return message('Seri tidak ditemukan.');
   if (!s.files.length) return message('Seri ini belum punya file.');
-  const files = [];
-  for (const f of s.files) {
-    const meta = (await store.hasBlob(f.id)) ? await store.getMeta(f.id) : null;
-    if (!meta?.sizes?.length) break;
-    files.push({ id: f.id, sizes: meta.sizes, outline: meta.outline ?? [] });
-  }
+  const pi = s.files.findIndex((f) => f.id === progress?.fileId);
+  const run = await localRun(s.files, Math.max(0, pi));
   const invert = await store.getKv(`invert:${seriesId}`).catch(() => false);
   if (my !== gen) return;
   const word = s.files.some((f) => /batch/i.test(f.name)) ? 'Batch' : 'Bagian';
-  const pi = s.files.findIndex((f) => f.id === progress?.fileId);
-  if (!files.length || pi >= files.length) return message(missText(word, files.length + 1));
+  if (!run) return message(missText(word, Math.max(0, pi) + 1));
+  const { lo, files } = run;
 
   const posEl = h('span', { className: 'rpos' });
   const spacer = h('div', { className: 'rpages' });
@@ -72,18 +68,19 @@ export async function open(seriesId) {
     toc: () => panel(ses, panels.toc), bookmark: () => panel(ses, panels.bookmarks),
     night: () => panel(ses, panels.night), zoom: () => { if (ses.zoom !== 1) setZoom(ses, 1); },
   };
-  const root = h('div', { className: `reader${invert ? ' invert' : ''}` }, spacer,
-    files.length < s.files.length ? h('p', { className: 'rmissing' }, missText(word, files.length + 1)) : null,
+  const topMiss = h('p', { className: 'rmissing' }), botMiss = h('p', { className: 'rmissing' });
+  const root = h('div', { className: `reader${invert ? ' invert' : ''}` }, topMiss, spacer, botMiss,
     h('header', { className: 'rbar rtop' },
       h('button', { 'aria-label': 'Kembali', onclick: back }, '←'),
       h('div', { className: 'rtitle' }, h('strong', {}, s.title), posEl)),
     h('nav', { className: 'rbar rbottom' }, ...[['toc', 'Daftar isi'], ['bookmark', 'Bookmark'], ['night', 'Malam'], ['zoom', 'Zoom']]
       .map(([k, t]) => h('button', { 'data-act': k, onclick: acts[k] }, t))));
   const ses = r = {
-    seriesId, word, files, all: s.files, multi: s.files.length > 1, root, spacer, posEl, zoom: 1,
+    seriesId, word, lo, files, topMiss, botMiss, all: s.files, multi: s.files.length > 1, root, spacer, posEl, zoom: 1,
     zoomBtn: root.querySelector('[data-act="zoom"]'), panel: null,
     slots: new Map(), docs: new Map(), L: null, W: 0, y0: 0, last: '', timer: 0, raf: 0, busy: false, lastScroll: 0, offs: [],
   };
+  setMiss(ses);
   history.scrollRestoration = 'manual';
   app().replaceChildren(root);
   layoutPages(ses);
@@ -117,24 +114,42 @@ export function close() {
 window.addEventListener('rak:file-ready', async (e) => {
   const s = r;
   if (!s) { if (wanted && document.querySelector('.reader-msg')) open(wanted); return; }
-  const start = s.files.length;
-  if (!s.all.slice(start).some((f) => f.id === e.detail?.fileId)) return;
-  const add = [];
-  for (const f of s.all.slice(start)) {
-    const meta = (await store.hasBlob(f.id)) ? await store.getMeta(f.id) : null;
-    if (!meta?.sizes?.length) break;
-    add.push({ id: f.id, sizes: meta.sizes, outline: meta.outline ?? [] });
-  }
-  if (s !== r || s.files.length !== start || !add.length) return;
+  const id = e.detail?.fileId;
+  if (!s.all.some((f) => f.id === id) || s.files.some((f) => f.id === id)) return;
+  const { lo, files: { length: n } } = s;
+  const run = await localRun(s.all, lo);
+  if (s !== r || s.lo !== lo || s.files.length !== n || !run || run.files.length === n) return;
   const pos = currentPos(s);
-  s.files.push(...add);
-  const miss = s.root.querySelector('.rmissing');
-  if (s.files.length === s.all.length) miss?.remove();
-  else if (miss) miss.textContent = missText(s.word, s.files.length + 1);
+  s.lo = run.lo;
+  s.files = run.files;
+  setMiss(s);
   layoutPages(s);
   if (pos) window.scrollTo(window.scrollX, s.y0 + scrollTopFor(s.L, pos));
   update(s);
 });
+
+// Rentang file lokal berurutan terpanjang yang memuat all[at] (file dari perangkat lain bisa di tengah seri); null kalau all[at] tidak lokal.
+async function localRun(all, at) {
+  const local = async (f) => {
+    const m = (await store.hasBlob(f.id)) ? await store.getMeta(f.id) : null;
+    return m?.sizes?.length ? { id: f.id, sizes: m.sizes, outline: m.outline ?? [] } : null;
+  };
+  const mid = await local(all[at]);
+  if (!mid) return null;
+  const files = [mid];
+  let lo = at;
+  for (let m; lo > 0 && (m = await local(all[lo - 1]));) { files.unshift(m); lo--; }
+  for (let m, i = at + 1; i < all.length && (m = await local(all[i])); i++) files.push(m);
+  return { lo, files };
+}
+
+function setMiss(s) {
+  const hi = s.lo + s.files.length;
+  s.topMiss.hidden = s.lo === 0;
+  s.topMiss.textContent = missText(s.word, s.lo);
+  s.botMiss.hidden = hi === s.all.length;
+  s.botMiss.textContent = missText(s.word, hi + 1);
+}
 
 function layoutPages(s) {
   s.W = Math.min(window.innerWidth, 900) * s.zoom;
@@ -308,8 +323,8 @@ function update(s) {
 function showPos(s, y) {
   const p = positionAt(s.L, y);
   if (!p) return;
-  const fi = s.files.findIndex((f) => f.id === p.fileId);
-  const text = `${s.multi ? `${s.word} ${fi + 1} · ` : ''}hal ${p.page} dari ${s.files[fi].sizes.length}`;
+  const f = s.files.find((x) => x.id === p.fileId);
+  const text = `${s.multi ? `${s.word} ${s.all.findIndex((x) => x.id === p.fileId) + 1} · ` : ''}hal ${p.page} dari ${f.sizes.length}`;
   if (s.posEl.textContent !== text) s.posEl.textContent = text;
 }
 

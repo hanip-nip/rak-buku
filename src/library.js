@@ -130,6 +130,7 @@ async function syncLine() {
   if (state === 'login') return els.sync.replaceChildren('Belum masuk Google · ', masuk);
   if (state === 'relogin') return els.sync.replaceChildren('Login ulang diperlukan · ', masuk);
   if (state === 'offline') return els.sync.replaceChildren('Offline — perubahan disimpan di HP');
+  if (state === 'error') return els.sync.replaceChildren('Sinkron gagal, dicoba lagi nanti');
   if (state === 'syncing') return els.sync.replaceChildren(`Menyinkronkan…${detail.total ? ` (mengunggah ${detail.done + 1}/${detail.total})` : ''}`);
   const my = syncSt;
   const at = await store.getKv('lastSync').catch(() => null);

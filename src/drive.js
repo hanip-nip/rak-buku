@@ -103,7 +103,7 @@ export const download = async (token, driveId) => (await call(`${API}/files/${dr
 // R15: per rentang, supaya file besar tidak menjadi satu Response raksasa di memori.
 export async function downloadRange(token, driveId, start, end) {
   const res = await call(`${API}/files/${driveId}?alt=media`, token, {}, { Range: `bytes=${start}-${end}` });
-  if (res.status !== 206) throw fail(res, 'range');
+  if (res.status !== 206 && !(res.status === 200 && start === 0)) throw fail(res, 'range'); // 200 = seluruh file (kecil)
   return res.blob();
 }
 

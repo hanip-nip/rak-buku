@@ -4,7 +4,7 @@ import * as reader from './reader.js';
 import * as auth from './auth.js';
 import * as drive from './drive.js';
 import * as pdf from './pdf.js';
-import { createSync, activeSeries } from './sync.js';
+import { createSync, activeSeries, syncOnChange } from './sync.js';
 
 const sync = createSync({ drive, store, auth, pdf });
 
@@ -39,7 +39,7 @@ async function boot() {
   window.addEventListener('hashchange', route);
   route();
   // Pemicu sync. 'rak:refresh' sengaja tidak memicu, supaya tidak berputar.
-  window.addEventListener('rak:changed', sync.schedule);
+  window.addEventListener('rak:changed', () => { if (syncOnChange()) sync.schedule(); });
   window.addEventListener('online', () => sync.run());
   window.addEventListener('pagehide', sync.stop);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') sync.run(); });

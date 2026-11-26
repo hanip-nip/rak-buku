@@ -1,6 +1,6 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSync, setActiveSeries } from '../src/sync.js';
+import { createSync, setActiveSeries, syncOnChange } from '../src/sync.js';
 
 class ReloginError extends Error { constructor() { super('relogin'); this.name = 'ReloginError'; } }
 const err = (status) => Object.assign(new Error(`drive ${status}`), { status });
@@ -165,7 +165,7 @@ test('prefetch seri aktif per rentang 8 MiB lalu simpan meta, blob, dan rak:file
   st.blobs.clear();
   setActiveSeries('s1');
   const ranges = [];
-  drv.downloadRange = async (t, id, a, b) => { ranges.push([id, a, b]); return new Blob(['ab']); };
+  drv.downloadRange = async (t, id, a, b) => { ranges.push([id, a, b]); return new Blob([new Uint8Array(b - a + 1)]); };
   let destroyed = false;
   const pdf = {
     openPdf: async (blob) => ({ blob, destroy: () => { destroyed = true; } }),
@@ -178,9 +178,79 @@ test('prefetch seri aktif per rentang 8 MiB lalu simpan meta, blob, dan rak:file
     assert.equal(await createSync({ ...deps, pdf }).run(), 'ok');
   } finally { delete globalThis.dispatchEvent; }
   assert.deepEqual(ranges, [['D1', 0, M - 1], ['D1', M, M + 4]]);
-  assert.equal(st.blobs.get('f1').size, 4);
+  assert.equal(st.blobs.get('f1').size, M + 5);
   assert.equal(st.blobs.get('f1').type, 'application/pdf');
   assert.deepEqual(st.meta.get('f1'), { sizes: [{ w: 1, h: 2 }], outline: [] });
   assert.ok(destroyed);
   assert.ok(events.some((e) => e.type === 'rak:file-ready' && e.detail.fileId === 'f1'));
+});
+
+const pdfOk = { openPdf: async () => ({ destroy() {} }), pageSizes: async () => [{ w: 1, h: 1 }], outlinePages: async () => [] };
+
+test('downloadRange 200 berisi seluruh file → dianggap lengkap', async () => {
+  st.own.series[0].files = [file('f1', { driveId: 'D1', size: 9 * 1024 * 1024 })];
+  st.blobs.clear();
+  setActiveSeries('s1');
+  let n = 0;
+  drv.downloadRange = async () => { n++; return new Blob([new Uint8Array(9 * 1024 * 1024)]); };
+  assert.equal(await createSync({ ...deps, pdf: pdfOk }).run(), 'ok');
+  assert.equal(n, 1);
+  assert.ok(st.blobs.has('f1'));
+});
+
+test('prefetch gagal → run tetap ok, file dilewati 30 menit', async () => {
+  st.own.series[0].files = [file('f1', { driveId: 'D1' })];
+  st.blobs.clear();
+  setActiveSeries('s1');
+  let n = 0, t = 1000;
+  drv.downloadRange = async () => { n++; return new Blob([new Uint8Array(20)]); };
+  const pdf = { ...pdfOk, openPdf: async () => { throw new Error('PDF rusak'); } };
+  const sync = createSync({ ...deps, pdf, now: () => t });
+  const err0 = console.error; console.error = () => {};
+  try {
+    assert.equal(await sync.run(), 'ok');
+    assert.equal(st.kv['prefetchFail:f1'], 1000);
+    assert.equal(st.kv.lastSync, 1000);
+    t += 29 * 60_000;
+    assert.equal(await sync.run(), 'ok');
+    assert.equal(n, 1, 'tidak di-download ulang dalam 30 menit');
+    t += 2 * 60_000;
+    await sync.run();
+    assert.equal(n, 2);
+  } finally { console.error = err0; }
+});
+
+test('seri dihapus selama upload → file baru di Drive di-trash', async () => {
+  st.outbox.set('j1', { id: 'j1', type: 'upload', seriesId: 's1', fileId: 'f1' });
+  drv.uploadChunk = async (u, b, start) => { log.push(`uploadChunk:${u}:${start}`); st.own.series[0].deleted = true; return { done: true, driveId: 'DNEW' }; };
+  assert.equal(await createSync(deps).run(), 'ok');
+  assert.ok(log.includes('trash:DNEW'));
+  assert.equal(st.outbox.size, 0);
+});
+
+test('upload tidak dihapus → tidak di-trash', async () => {
+  st.outbox.set('j1', { id: 'j1', type: 'upload', seriesId: 's1', fileId: 'f1' });
+  assert.equal(await createSync(deps).run(), 'ok');
+  assert.ok(!log.some((l) => l.startsWith('trash')));
+});
+
+test('status sendiri ditulis ulang di tengah upload panjang setelah ≥ 30 detik', async () => {
+  st.outbox.set('j1', { id: 'j1', type: 'upload', seriesId: 's1', fileId: 'f1' });
+  let t = 0, k = 0;
+  drv.uploadChunk = async (u, b, start) => {
+    log.push(`uploadChunk:${start}`); t += 20_000; k++;
+    return k < 3 ? { done: false, next: k } : { done: true, driveId: 'D1' };
+  };
+  assert.equal(await createSync({ ...deps, now: () => t }).run(), 'ok');
+  const W = `writeJson:status-${ME}.json`;
+  const seq = log.filter((l) => l === W || l.startsWith('uploadChunk'));
+  // tulis awal, chunk 0 (t=20 dtk), chunk 1 (t=40 dtk), tulis ulang, chunk 2, tulis setelah selesai
+  assert.deepEqual(seq, [W, 'uploadChunk:0', 'uploadChunk:1', W, 'uploadChunk:2', W]);
+});
+
+test("rak:changed saat seri terbuka di pembaca tidak menjadwalkan sync", () => {
+  setActiveSeries(null);
+  assert.equal(syncOnChange(), true);
+  setActiveSeries('s1');
+  assert.equal(syncOnChange(), false);
 });
