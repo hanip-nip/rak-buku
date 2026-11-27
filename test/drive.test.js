@@ -231,3 +231,29 @@ test('downloadRange yang macet tanpa byte baru dibatalkan setelah batas diam', a
   }), { status: 206 }));
   await assert.rejects(drive.downloadRange('TK', 'I', 0, 9, () => {}, 30), (e) => e.name === 'AbortError');
 });
+
+test('ensureChild mencari subfolder di parent, membuat bila belum ada, men-cache, dan meloloskan tanda kutip', async () => {
+  stub((url, init) => (init.method === 'POST' ? json({ id: 'SUB' }) : json({ files: [] })));
+  assert.equal(await drive.ensureChild('TK', 'ROOT', "Jojo's"), 'SUB');
+  const get = calls.find((c) => c.url.includes('q='));
+  const q = new URL(get.url).searchParams.get('q');
+  assert.ok(q.includes("name='Jojo\\'s'"), q);
+  assert.match(q, /'ROOT' in parents/);
+  assert.deepEqual(JSON.parse(calls.find((c) => c.init.method === 'POST').init.body).parents, ['ROOT']);
+  calls = [];
+  assert.equal(await drive.ensureChild('TK', 'ROOT', "Jojo's"), 'SUB');
+  assert.equal(calls.length, 0);
+  await drive.forgetChild('ROOT', "Jojo's");
+  stub(() => json({ files: [{ id: 'OLD' }] }));
+  assert.equal(await drive.ensureChild('TK', 'ROOT', "Jojo's"), 'OLD');
+});
+
+test('move dan parentsOf', async () => {
+  stub(() => json({ id: 'X', parents: ['P1'] }));
+  await drive.move('TK', 'X', 'TO', ['P1', 'P2']);
+  const u = new URL(calls[0].url);
+  assert.equal(calls[0].init.method, 'PATCH');
+  assert.equal(u.searchParams.get('addParents'), 'TO');
+  assert.equal(u.searchParams.get('removeParents'), 'P1,P2');
+  assert.deepEqual(await drive.parentsOf('TK', 'X'), ['P1']);
+});

@@ -1,5 +1,5 @@
 // Tiap deploy yang mengubah file aplikasi mana pun WAJIB menaikkan VERSION, kalau tidak perangkat tetap memakai cache lama.
-const VERSION = 'v9';
+const VERSION = 'v10';
 const CACHE = `rak-buku-${VERSION}`;
 const FILES = [
   './', 'index.html', 'app.css', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png',

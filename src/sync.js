@@ -3,6 +3,7 @@ import { setDriveId } from './state.js';
 import { filesToFetch } from './prefetch.js';
 
 const RANGE = 8 * 1024 * 1024;
+const CAT_FOLDER = { komik: 'Komik', novel: 'Novel', lain: 'Buku lain' }; // Drive: Rak Buku/<Kategori>/<Judul seri>/
 const FAIL_WAIT = 30 * 60_000; // prefetch yang gagal dilewati selama ini
 const FAIL_WAIT_ACTIVE = 60_000; // seri yang sedang dibuka: dicoba lagi lebih cepat
 const OWN_EVERY = 1000; // di tengah upload panjang, status sendiri yang berubah ditulis ulang paling cepat tiap 1 dtk
@@ -69,6 +70,22 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
       }
     };
     const me = await store.deviceId();
+    // Folder seri di Drive; folder yang terhapus (404) dilupakan lalu dibuat ulang sekali.
+    const seriesFolder = async (series) => {
+      const cat = CAT_FOLDER[series.category] ?? 'Buku lain';
+      const title = (series.title || 'Tanpa judul').trim().slice(0, 200);
+      const get = async () => {
+        const c = await api((t) => drive.ensureChild(t, folder, cat));
+        return { cat: c, id: await api((t) => drive.ensureChild(t, c, title)) };
+      };
+      try { return (await get()).id; } catch (e) {
+        if (e?.status !== 404) throw e;
+        await drive.forgetChild(folder, cat);
+        const c = await api((t) => drive.ensureChild(t, folder, cat));
+        await drive.forgetChild(c, title);
+        return (await get()).id;
+      }
+    };
 
     // 1. Status perangkat lain: hanya yang modifiedTime-nya berubah.
     const listed = await inFolder((t, f) => drive.listStatus(t, f));
@@ -127,10 +144,13 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
         await store.outboxDelete(job.id);
       } else if (job.type === 'upload') {
         const prog = (fileId, sent, size) => status('syncing', { kind: 'up', fileId, sent, size, done, total });
-        if (await upload(job, { inFolder, api, writeOwn, due: () => now() - lastOwn >= OWN_EVERY, remote, prog })) await writeOwn();
+        if (await upload(job, { inFolder, api, writeOwn, due: () => now() - lastOwn >= OWN_EVERY, remote, prog, seriesFolder })) await writeOwn();
         done++;
       }
     }
+
+    // 3b. Rapikan Drive: file yang sudah ter-upload dipindah ke folder seri (sekali per file, dicatat di placed:<driveId>).
+    await tidy(api, seriesFolder);
 
     // 4. Prefetch.
     await prefetch(merged, api);
@@ -141,7 +161,7 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
   }
 
   // true kalau selesai ter-upload.
-  async function upload(job, { inFolder, api, writeOwn, due, remote, prog }) {
+  async function upload(job, { inFolder, api, writeOwn, due, remote, prog, seriesFolder }) {
     const blob = await store.getBlob(job.fileId);
     if (!blob) { await store.outboxDelete(job.id); return false; } // sudah dihapus dari perangkat
     let r = null;
@@ -152,8 +172,10 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
     }
     if (!r) {
       const own = await store.getOwn();
-      const name = own.series.find((s) => s.id === job.seriesId)?.files.find((f) => f.id === job.fileId)?.name ?? `${job.fileId}.pdf`;
-      const sessionUrl = await inFolder((t, f) => drive.startUpload(t, f, name, blob.size));
+      const ser = own.series.find((s) => s.id === job.seriesId);
+      const name = ser?.files.find((f) => f.id === job.fileId)?.name ?? `${job.fileId}.pdf`;
+      const dest = ser ? await seriesFolder(ser) : null;
+      const sessionUrl = dest ? await api((t) => drive.startUpload(t, dest, name, blob.size)) : await inFolder((t, f) => drive.startUpload(t, f, name, blob.size));
       job = { ...job, sessionUrl, size: blob.size };
       await store.outboxPut(job);
       r = { done: false, next: 0 };
@@ -173,6 +195,30 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
     }
     await store.outboxDelete(job.id);
     return true;
+  }
+
+  async function tidy(api, seriesFolder) {
+    const own = await store.getOwn();
+    for (const ser of own.series) {
+      if (ser.deleted) continue;
+      for (const f of ser.files) {
+        if (f.deleted || !f.driveId) continue;
+        if (stopped || !online()) throw new Stopped();
+        const want = await seriesFolder(ser);
+        const key = `placed:${f.driveId}`;
+        if ((await store.getKv(key)) === want) continue;
+        try {
+          const parents = await api((t) => drive.parentsOf(t, f.driveId));
+          const away = parents.filter((p) => p !== want);
+          if (away.length || !parents.includes(want)) await api((t) => drive.move(t, f.driveId, want, away));
+          await store.setKv(key, want);
+        } catch (e) {
+          if (e instanceof TypeError || e?.name === 'ReloginError') throw e;
+          if (e?.status === 404) { await store.setKv(key, want); continue; } // file sudah tidak ada di Drive
+          console.error('Gagal merapikan file Drive', f.name, e);
+        }
+      }
+    }
   }
 
   async function prefetch(merged, api) {

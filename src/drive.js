@@ -33,6 +33,30 @@ export async function ensureFolder(token) {
 }
 export const forgetFolder = () => deps.setKv('driveFolder', null);
 
+// Subfolder (kategori / judul seri) di bawah parent; dicari dulu supaya perangkat lain memakai folder yang sama.
+const childKey = (parent, name) => `dfolder:${parent}/${name}`;
+export async function ensureChild(token, parentId, name) {
+  const cached = await deps.getKv(childKey(parentId, name));
+  if (cached) return cached;
+  const esc = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'"); // kueri Drive: \ dan ' diloloskan dengan \
+  const q = `name='${esc}' and '${parentId}' in parents and mimeType='${FOLDER_MIME}' and trashed=false`;
+  let id = (await (await call(`${API}/files?${qs({ q, fields: 'files(id)' })}`, token)).json()).files?.[0]?.id;
+  if (!id) {
+    const res = await call(`${API}/files?fields=id`, token,
+      { method: 'POST', body: JSON.stringify({ name, mimeType: FOLDER_MIME, parents: [parentId] }) },
+      { 'Content-Type': 'application/json' });
+    id = (await res.json()).id;
+  }
+  await deps.setKv(childKey(parentId, name), id);
+  return id;
+}
+export const forgetChild = (parentId, name) => deps.setKv(childKey(parentId, name), null);
+
+export const parentsOf = async (token, id) => (await (await call(`${API}/files/${id}?fields=parents`, token)).json()).parents ?? [];
+
+export const move = (token, id, to, from) => call(`${API}/files/${id}?${qs({ addParents: to, removeParents: from.join(','), fields: 'id' })}`, token,
+  { method: 'PATCH', body: '{}' }, { 'Content-Type': 'application/json' });
+
 export async function listStatus(token, folderId) {
   const q = `'${folderId}' in parents and name contains 'status-' and trashed=false`;
   const res = await call(`${API}/files?${qs({ q, fields: 'files(id,name,modifiedTime)', pageSize: '100' })}`, token);

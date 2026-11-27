@@ -41,11 +41,15 @@ beforeEach(() => {
     listStatus: async () => [],
     readJson: async (t, id) => { log.push(`readJson:${id}`); throw new Error('unexpected'); },
     writeJson: async (t, folder, name) => { log.push(`writeJson:${name}`); return 'OWN'; },
-    startUpload: async () => { log.push('startUpload'); return 'U-new'; },
+    startUpload: async (tk, folder) => { log.push(`startUpload:${folder}`); return 'U-new'; },
     uploadOffset: async () => { throw new Error('unexpected'); },
     uploadChunk: async (url, blob, start) => { log.push(`uploadChunk:${url}:${start}`); return { done: true, driveId: 'D1' }; },
     trash: async (t, id) => { log.push(`trash:${id}`); },
     downloadRange: async () => { throw new Error('unexpected'); },
+    ensureChild: async (tk, parent, name) => `${parent}/${name}`,
+    forgetChild: async () => {},
+    parentsOf: async (tk, id) => { log.push(`parentsOf:${id}`); return ['F/Komik/S']; },
+    move: async (tk, id, to, from) => { log.push(`move:${id}:${to}:${from.join(',')}`); },
   };
   au = { isLoggedIn: async () => true, getToken: async () => 'T', _reset: () => { log.push('reset'); } };
   deps = { drive: drv, store, auth: au, now: () => 1000, online: () => true };
@@ -57,7 +61,7 @@ test('upload yang terputus dilanjutkan dari sessionUrl dan offset tersimpan', as
   assert.equal(await createSync(deps).run(), 'ok');
   assert.ok(log.includes('uploadOffset:U:20'));
   assert.ok(log.includes('uploadChunk:U:10'));
-  assert.ok(!log.includes('startUpload'));
+  assert.ok(!log.some((l) => l.startsWith('startUpload')));
   assert.equal(st.own.series[0].files[0].driveId, 'D1');
   assert.equal(st.outbox.size, 0);
 });
@@ -139,14 +143,14 @@ test('blob lokal hilang → job upload dibuang', async () => {
   st.blobs.clear();
   assert.equal(await createSync(deps).run(), 'ok');
   assert.equal(st.outbox.size, 0);
-  assert.ok(!log.includes('startUpload'));
+  assert.ok(!log.some((l) => l.startsWith('startUpload')));
 });
 
 test('sesi upload kedaluwarsa (410) → mulai ulang', async () => {
   st.outbox.set('j1', { id: 'j1', type: 'upload', seriesId: 's1', fileId: 'f1', sessionUrl: 'U', size: 20 });
   drv.uploadOffset = async () => { throw err(410); };
   assert.equal(await createSync(deps).run(), 'ok');
-  assert.ok(log.includes('startUpload') && log.includes('uploadChunk:U-new:0'));
+  assert.ok(log.some((l) => l.startsWith('startUpload')) && log.includes('uploadChunk:U-new:0'));
 });
 
 test('offline di tengah upload → berhenti, job tetap', async () => {
@@ -353,6 +357,29 @@ test('seri bertanda download semua (fetchAll): semua batch di-download, bukan ha
   drv.downloadRange = async () => new Blob([new Uint8Array(20)]);
   assert.equal(await createSync({ ...deps, pdf: pdfOk }).run(), 'ok');
   assert.deepEqual([...st.blobs.keys()].sort(), ['f1', 'f2', 'f3', 'f4', 'f5']);
+});
+
+test('upload masuk ke folder Rak Buku/<Kategori>/<Judul seri>', async () => {
+  st.outbox.set('j1', { id: 'j1', type: 'upload', seriesId: 's1', fileId: 'f1' });
+  assert.equal(await createSync(deps).run(), 'ok');
+  assert.ok(log.includes('startUpload:F/Komik/S'), log.join(' '));
+});
+
+test('file lama di folder lain dipindah ke folder seri sekali saja', async () => {
+  st.own.series[0].files = [file('f1', { driveId: 'D1' })];
+  drv.parentsOf = async (tk, id) => { log.push(`parentsOf:${id}`); return ['F']; };
+  const sync = createSync(deps);
+  assert.equal(await sync.run(), 'ok');
+  assert.ok(log.includes('move:D1:F/Komik/S:F'), log.join(' '));
+  log = [];
+  assert.equal(await sync.run(), 'ok');
+  assert.ok(!log.some((l) => l.startsWith('parentsOf') || l.startsWith('move')));
+});
+
+test('file yang sudah di folder seri tidak dipindah', async () => {
+  st.own.series[0].files = [file('f1', { driveId: 'D1' })];
+  assert.equal(await createSync(deps).run(), 'ok');
+  assert.ok(log.includes('parentsOf:D1') && !log.some((l) => l.startsWith('move')));
 });
 
 test('prefetch: offline di tengah download → run offline, lastSync tidak maju, tidak ditandai gagal', async () => {
