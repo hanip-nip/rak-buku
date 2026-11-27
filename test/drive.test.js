@@ -215,3 +215,19 @@ test('downloadRange mengirim header Range dan menuntut 206', async () => {
   assert.equal(await (await drive.downloadRange('TK', 'I', 0, 4)).text(), 'semua'); // file kecil utuh
   await assert.rejects(drive.downloadRange('TK', 'I', 5, 9), (e) => e.status === 200);
 });
+
+test('downloadRange melaporkan byte yang masuk selama dibaca', async () => {
+  const body = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(3)); c.enqueue(new Uint8Array(4)); c.close(); } });
+  stub(() => new Response(body, { status: 206 }));
+  const seen = [];
+  const b = await drive.downloadRange('TK', 'I', 0, 6, (n) => seen.push(n));
+  assert.equal(b.size, 7);
+  assert.deepEqual(seen, [3, 7]);
+});
+
+test('downloadRange yang macet tanpa byte baru dibatalkan setelah batas diam', async () => {
+  stub((url, init) => new Response(new ReadableStream({
+    start(c) { c.enqueue(new Uint8Array(2)); init.signal.addEventListener('abort', () => c.error(new DOMException('stop', 'AbortError'))); },
+  }), { status: 206 }));
+  await assert.rejects(drive.downloadRange('TK', 'I', 0, 9, () => {}, 30), (e) => e.name === 'AbortError');
+});

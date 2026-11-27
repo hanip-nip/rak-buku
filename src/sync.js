@@ -4,6 +4,7 @@ import { filesToFetch } from './prefetch.js';
 
 const RANGE = 8 * 1024 * 1024;
 const FAIL_WAIT = 30 * 60_000; // prefetch yang gagal dilewati selama ini
+const FAIL_WAIT_ACTIVE = 60_000; // seri yang sedang dibuka: dicoba lagi lebih cepat
 const OWN_EVERY = 1000; // di tengah upload panjang, status sendiri yang berubah ditulis ulang paling cepat tiap 1 dtk
 let active = null; // seri yang sedang dibuka di pembaca
 export const setActiveSeries = (id) => { active = id; };
@@ -22,6 +23,7 @@ class Stopped extends Error {}
 
 export function createSync({ drive, store, auth, pdf, now = Date.now, online = () => navigator.onLine }) {
   let running = false, again = false, stopped = false, timer = 0;
+  const partial = new Map(); // fileId -> {parts, got}: download yang terputus dilanjutkan dari byte terakhir
   let ownSent = null, mergedKey = null; // isi terakhir yang ditulis ke Drive / dipancarkan, supaya sync tiap detik tidak menulis ulang
   const status = (state, detail = {}) => emit('rak:sync', { state, detail });
 
@@ -190,12 +192,12 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
         const f = s.files.find((x) => x.id === id);
         if (!f.driveId || !f.size) continue;
         const failKey = `prefetchFail:${id}`;
-        if (now() - ((await store.getKv(failKey)) ?? -Infinity) < FAIL_WAIT) continue;
+        if (now() - ((await store.getKv(failKey)) ?? -Infinity) < (sid === active ? FAIL_WAIT_ACTIVE : FAIL_WAIT)) continue;
         try {
           await fetchFile(f, api);
         } catch (e) {
           // Gangguan jaringan/login/berhenti: tidak ditandai gagal; dilempar supaya status run benar (bukan 'ok').
-          if (e instanceof Stopped || e instanceof TypeError || e?.name === 'ReloginError' || !online()) throw e;
+          if (e instanceof Stopped || e instanceof TypeError || e?.name === 'AbortError' || e?.name === 'ReloginError' || !online()) throw e;
           console.error('Prefetch gagal', f.name, e);
           await store.setKv(failKey, now());
         }
@@ -204,16 +206,25 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
   }
 
   async function fetchFile(f, api) {
-    const parts = [];
-    for (let a = 0; a < f.size;) {
+    const p = partial.get(f.id) ?? { parts: [], got: 0 };
+    partial.set(f.id, p);
+    let last = 0;
+    for (let a = p.got; a < f.size;) {
       if (stopped || !online()) throw new Stopped();
       status('syncing', { kind: 'down', fileId: f.id, got: a, size: f.size }); // progres download untuk pembaca dan rak
       const b = Math.min(a + RANGE, f.size) - 1;
-      const part = await api((t) => drive.downloadRange(t, f.driveId, a, b));
+      const onBytes = (n) => { // paling sering tiap 250 ms
+        const t = Date.now();
+        if (t - last >= 250) { last = t; status('syncing', { kind: 'down', fileId: f.id, got: a + n, size: f.size }); }
+      };
+      const part = await api((t) => drive.downloadRange(t, f.driveId, a, b, onBytes));
       if (!part.size) throw new Error('rentang kosong');
-      parts.push(part);
+      p.parts.push(part);
       a += part.size; // 200 berisi seluruh file kecil → langsung lengkap
+      p.got = a;
     }
+    partial.delete(f.id);
+    const parts = p.parts;
     const blob = new Blob(parts, { type: 'application/pdf' });
     const doc = await pdf.openPdf(blob);
     let meta;

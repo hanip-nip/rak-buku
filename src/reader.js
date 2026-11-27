@@ -13,12 +13,18 @@ let r = null; // sesi pembaca aktif
 let gen = 0;
 let wanted = null; // seri yang diminta dibuka (juga saat hanya pesan "belum ada di perangkat" yang tampil)
 let dl = null; // download yang sedang berjalan, dari detail rak:sync: {fileId, got, size}
+let syncState = null; // state rak:sync terakhir
 let pending = null; // pesan "belum ada" yang tampil tanpa sesi: {el, word, n, id}
 const offText = (word, n) => `${word} ${n} belum ada di perangkat. Sambungkan internet untuk men-download.`;
 // File yang akan di-download sync: online -> "Sedang men-download", offline -> minta internet.
 const missText = (word, n, id) => {
-  if (dl && id && dl.fileId === id && dl.size) return `Sedang men-download ${word} ${n}… (${Math.floor((dl.got / dl.size) * 100)}%)`;
-  return navigator.onLine ? `Sedang men-download ${word} ${n}…` : offText(word, n);
+  if (!navigator.onLine) return offText(word, n);
+  if (dl && id && dl.fileId === id && dl.size) {
+    return `Sedang men-download ${word} ${n}… ${Math.floor((dl.got / dl.size) * 100)}% (${(dl.got / 1048576).toFixed(0)} dari ${(dl.size / 1048576).toFixed(0)} MB). Biarkan aplikasi tetap terbuka.`;
+  }
+  if (syncState === 'login' || syncState === 'relogin') return `Masuk ke Google dulu untuk men-download ${word} ${n}.`;
+  if (syncState === 'error') return `Download ${word} ${n} terganggu. Dicoba lagi otomatis, atau ketuk Coba sekarang.`;
+  return `Menunggu download ${word} ${n}…`;
 };
 
 const BACKUP = 'rak-pos:';
@@ -39,9 +45,9 @@ function dropBackup(seriesId, raw) {
 const app = () => document.getElementById('app');
 const back = () => { location.hash = '#/'; };
 
-function message(text) {
+function message(text, extra = null) {
   const p = h('p', {}, text);
-  app().replaceChildren(h('div', { className: 'reader-msg' }, p, h('button', { onclick: back }, 'Kembali ke rak')));
+  app().replaceChildren(h('div', { className: 'reader-msg' }, p, extra, h('button', { onclick: back }, 'Kembali ke rak')));
   return p;
 }
 
@@ -52,6 +58,7 @@ function refreshMiss() {
 window.addEventListener('rak:sync', (e) => {
   const { state, detail } = e.detail ?? {};
   dl = state === 'syncing' && detail?.kind === 'down' ? detail : null;
+  syncState = state;
   refreshMiss();
 });
 for (const ev of ['online', 'offline']) window.addEventListener(ev, refreshMiss);
@@ -85,7 +92,10 @@ export async function open(seriesId) {
   if (!run) {
     window.dispatchEvent(new CustomEvent('rak:need')); // app.js: sync sekarang, jangan tunggu interval
     const id = s.files[at].id;
-    pending = { el: message(missText(word, at + 1, id)), word, n: at + 1, id };
+    pending = { el: message(missText(word, at + 1, id), h('button', { onclick: async () => {
+      await store.setKv(`prefetchFail:${id}`, null).catch(() => {});
+      window.dispatchEvent(new CustomEvent('rak:need'));
+    } }, 'Coba sekarang')), word, n: at + 1, id };
     return;
   }
 

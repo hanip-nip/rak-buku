@@ -198,10 +198,10 @@ test('downloadRange 200 berisi seluruh file → dianggap lengkap', async () => {
   assert.ok(st.blobs.has('f1'));
 });
 
-test('prefetch gagal → run tetap ok, file dilewati 30 menit', async () => {
+test('prefetch gagal (seri tidak sedang dibuka) → run tetap ok, file dilewati 30 menit', async () => {
   st.own.series[0].files = [file('f1', { driveId: 'D1' })];
   st.blobs.clear();
-  setActiveSeries('s1');
+  st.kv.wanted = ['s1'];
   let n = 0, t = 1000;
   drv.downloadRange = async () => { n++; return new Blob([new Uint8Array(20)]); };
   const pdf = { ...pdfOk, openPdf: async () => { throw new Error('PDF rusak'); } };
@@ -312,6 +312,38 @@ test('seri yang pernah dibuka di perangkat ini (wanted) tetap di-download setela
   drv.downloadRange = async () => new Blob([new Uint8Array(20)]);
   assert.equal(await createSync({ ...deps, pdf: pdfOk }).run(), 'ok');
   assert.ok(st.blobs.has('f1'));
+});
+
+test('download yang terputus dilanjutkan dari byte terakhir pada sync berikutnya', async () => {
+  const M = 8 * 1024 * 1024;
+  st.own.series[0].files = [file('f1', { driveId: 'D1', size: M + 5 })];
+  st.blobs.clear();
+  setActiveSeries('s1');
+  const asked = [];
+  let fail = true;
+  drv.downloadRange = async (t, id, a, b) => {
+    asked.push(a);
+    if (a > 0 && fail) { fail = false; throw new TypeError('jaringan putus'); }
+    return new Blob([new Uint8Array(b - a + 1)]);
+  };
+  const sync = createSync({ ...deps, pdf: pdfOk });
+  assert.equal(await sync.run(), 'offline');
+  assert.equal(await sync.run(), 'ok');
+  assert.deepEqual(asked, [0, M, M]);
+  assert.equal(st.blobs.get('f1').size, M + 5);
+});
+
+test('download seri yang sedang dibuka yang gagal dicoba lagi setelah 1 menit, bukan 30', async () => {
+  st.own.series[0].files = [file('f1', { driveId: 'D1' })];
+  st.blobs.clear();
+  setActiveSeries('s1');
+  let t = 0, n = 0;
+  drv.downloadRange = async () => { n++; throw Object.assign(new Error('drive 500'), { status: 500 }); };
+  const sync = createSync({ ...deps, pdf: pdfOk, now: () => t });
+  await sync.run();
+  t = 30_000; await sync.run();
+  t = 61_000; await sync.run();
+  assert.equal(n, 2);
 });
 
 test('prefetch: offline di tengah download → run offline, lastSync tidak maju, tidak ditandai gagal', async () => {

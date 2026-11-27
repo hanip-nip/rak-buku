@@ -101,10 +101,30 @@ export async function uploadOffset(sessionUrl, size) {
 export const download = async (token, driveId) => (await call(`${API}/files/${driveId}?alt=media`, token)).blob();
 
 // R15: per rentang, supaya file besar tidak menjadi satu Response raksasa di memori.
-export async function downloadRange(token, driveId, start, end) {
-  const res = await call(`${API}/files/${driveId}?alt=media`, token, {}, { Range: `bytes=${start}-${end}` });
-  if (res.status !== 206 && !(res.status === 200 && start === 0)) throw fail(res, 'range'); // 200 = seluruh file (kecil)
-  return res.blob();
+// onBytes(n): byte yang sudah masuk di rentang ini (progres di dalam satu rentang 8 MB).
+// Tanpa byte baru selama idleMs -> dibatalkan (AbortError), supaya koneksi yang macet di HP tidak menggantung selamanya.
+export async function downloadRange(token, driveId, start, end, onBytes, idleMs = 30_000) {
+  const ac = new AbortController();
+  let timer = setTimeout(() => ac.abort(), idleMs);
+  const poke = () => { clearTimeout(timer); timer = setTimeout(() => ac.abort(), idleMs); };
+  try {
+    const res = await call(`${API}/files/${driveId}?alt=media`, token, { signal: ac.signal }, { Range: `bytes=${start}-${end}` });
+    if (res.status !== 206 && !(res.status === 200 && start === 0)) throw fail(res, 'range'); // 200 = seluruh file (kecil)
+    if (!onBytes || !res.body) return await res.blob();
+    const reader = res.body.getReader();
+    const parts = [];
+    for (let got = 0; ;) {
+      poke();
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      got += value.byteLength;
+      onBytes(got);
+    }
+    return new Blob(parts);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export const trash = (token, driveId) => call(`${API}/files/${driveId}`, token,
