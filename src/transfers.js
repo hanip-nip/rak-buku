@@ -59,7 +59,9 @@ async function paint() {
   v.now.textContent = state === 'syncing' ? 'Sedang berjalan'
     : state === 'offline' ? 'Offline: transfer berlanjut saat internet tersambung'
       : state === 'login' || state === 'relogin' ? 'Masuk ke Google dulu untuk upload dan download'
-        : state === 'error' ? 'Sinkron gagal, dicoba lagi otomatis' : 'Semua tersinkron';
+        : state === 'error' ? 'Sinkron gagal, dicoba lagi otomatis'
+          : ups.length || queued.length ? [ups.length ? `${ups.length} upload` : '', queued.length ? `${queued.length} download` : ''].filter(Boolean).join(', ') + ' menunggu'
+            : 'Semua tersinkron';
   v.list.replaceChildren(...[
     h('h2', {}, 'Download ke perangkat ini'),
     down,

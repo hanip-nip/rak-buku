@@ -117,17 +117,24 @@ async function card(s, view) {
 // Kartu Lanjut baca: seri dengan progres terbaru.
 async function hero(s, view) {
   const p = view.progress[s.id];
-  const [pos, local] = await Promise.all([posText(s, p), localState(s)]);
-  const when = p ? ago(p.updatedAt) : '';
+  const [pos, local, who] = await Promise.all([posText(s, p), localState(s), lastDevice(s.id, p)]);
+  const when = p ? `${who ? `di ${who} · ` : ''}${ago(p.updatedAt)}` : '';
   return h('section', { className: 'hero', 'aria-label': 'Lanjut baca' },
     h('a', { href: seriesUrl(s), className: 'hero-cover', 'aria-label': `Halaman seri ${s.title}` }, coverEl(s)),
     h('div', { className: 'hero-info' },
-      h('span', { className: 'hero-cat' }, `${CATS[s.category] ?? ''} · ${local}`),
       h('h2', {}, s.title),
       h('p', { className: 'num' }, pos),
-      when ? h('p', { className: 'muted' }, `Terakhir dibaca ${when}`) : null,
+      when ? h('p', { className: 'muted' }, when) : null,
+      h('p', { className: 'muted' }, `${CATS[s.category] ?? ''} · ${local}`),
       h('div', { className: 'thin' }, h('i', { style: `width:${percent(s, p)}%` })),
       h('a', { className: 'btn primary', href: readUrl(s) }, icon('book'), 'Lanjut baca')));
+}
+
+// Nama perangkat yang menulis posisi terbaru (posisi gabungan tidak membawa nama perangkat).
+export async function lastDevice(seriesId, p) {
+  if (!p) return null;
+  const hit = (await devices()).find(({ state }) => state.progress?.[seriesId]?.updatedAt === p.updatedAt);
+  return hit ? (hit.me ? `${hit.state.device.name} ini` : hit.state.device.name) : null;
 }
 
 export const ago = (t) => {
@@ -162,20 +169,34 @@ async function refresh() {
   els.list.replaceChildren(...(cards.length ? cards : [first
     ? h('div', { className: 'empty-state' }, h('h2', {}, 'Rak masih kosong'),
       h('p', { className: 'muted' }, 'Tambahkan PDF komik atau novel dari perangkat ini. Kalau sudah pernah menambah buku di perangkat lain, masuk Google supaya rak tersinkron.'),
-      h('button', { className: 'primary', onclick: () => els.picker.click() }, icon('plus'), 'Tambah PDF'))
+      h('div', { className: 'row' }, h('button', { className: 'primary', onclick: () => els.picker.click() }, icon('plus'), 'Tambah PDF'),
+        ['login', 'relogin'].includes(syncSt?.state) ? h('button', { onclick: () => auth.login() }, 'Masuk Google') : null))
     : h('p', { className: 'muted empty' }, empty)]));
-  els.foot.textContent = `Ruang terpakai di HP: ${(bytes / 1048576).toFixed(1)} MB`;
+  els.foot.textContent = `Ruang terpakai di perangkat ini: ${(bytes / 1048576).toFixed(1)} MB`;
+  syncLine(); // baris status bergantung pada isi rak (tombol Masuk tidak dobel)
 }
 for (const ev of ['rak:changed', 'rak:refresh', 'rak:file-ready']) window.addEventListener(ev, refresh);
-window.addEventListener('rak:sync', (e) => { syncSt = e.detail; syncLine(); });
+const signedOut = (st) => st?.state === 'login' || st?.state === 'relogin';
+window.addEventListener('rak:sync', (e) => {
+  const was = signedOut(syncSt);
+  syncSt = e.detail;
+  syncLine();
+  if (was !== signedOut(syncSt)) refresh(); // tombol Masuk di keadaan rak kosong
+});
 
 async function syncLine() {
   if (!els) return;
   const { state, detail = {} } = syncSt ?? {};
   els.syncBtn?.classList.toggle('spin', state === 'syncing');
+  store.outboxAll().then((jobs) => {
+    const n = jobs.filter((j) => j.type === 'upload').length + (state === 'syncing' && detail.kind === 'down' ? 1 : 0);
+    els?.xfer?.classList.toggle('busy', n > 0);
+    els?.xfer?.setAttribute('aria-label', n ? `Transfer: ${n} berjalan atau menunggu` : 'Transfer: upload dan download');
+  }).catch(() => {});
   const masuk = h('button', { onclick: () => auth.login() }, 'Masuk');
-  if (state === 'login') return els.sync.replaceChildren('Belum masuk Google · ', masuk);
-  if (state === 'relogin') return els.sync.replaceChildren('Login ulang diperlukan · ', masuk);
+  const inCard = !!els.list.querySelector('.empty-state'); // tombol Masuk sudah ada di kartu rak kosong
+  if (state === 'login') return els.sync.replaceChildren(...(inCard ? ['Belum masuk Google'] : ['Belum masuk Google · ', masuk]));
+  if (state === 'relogin') return els.sync.replaceChildren(...(inCard ? ['Login ulang diperlukan'] : ['Login ulang diperlukan · ', masuk]));
   if (state === 'offline') return els.sync.replaceChildren('Offline — perubahan disimpan di HP');
   if (state === 'error') return els.sync.replaceChildren('Sinkron gagal, dicoba lagi nanti');
   if (state === 'syncing') {
@@ -210,7 +231,7 @@ export function show() {
   document.getElementById('app').replaceChildren(h('div', { className: 'page' },
     h('header', { className: 'top' },
       h('h1', {}, 'Rak Buku'),
-      h('a', { className: 'icon-btn', href: '#/transfer', 'aria-label': 'Transfer: upload dan download', title: 'Transfer' }, icon('transfer')),
+      els.xfer = h('a', { className: 'icon-btn xfer-btn', href: '#/transfer', 'aria-label': 'Transfer: upload dan download', title: 'Transfer' }, icon('transfer'), h('span', { className: 'xfer-label' }, 'Transfer')),
       syncBtn),
     h('label', { className: 'search' }, icon('search'), input),
     els.hero, els.tabs, els.list, els.sync, els.foot), picker,
@@ -346,8 +367,8 @@ async function orderDialog(seriesId) {
   const last = s.files.length - 1;
   const close = sheet('Urutan file', ...s.files.map((f, i) => h('div', { className: 'row item' },
     h('span', {}, f.name),
-    h('button', { disabled: i === 0, 'aria-label': 'Naik', onclick: () => move(f.id, -1) }, '↑'),
-    h('button', { disabled: i === last, 'aria-label': 'Turun', onclick: () => move(f.id, 1) }, '↓'))),
+    h('button', { disabled: i === 0, 'aria-label': 'Naik', onclick: () => move(f.id, -1) }, icon('up')),
+    h('button', { disabled: i === last, 'aria-label': 'Turun', onclick: () => move(f.id, 1) }, icon('down')))),
   h('button', { onclick: () => close() }, 'Selesai'));
 }
 

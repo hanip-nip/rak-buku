@@ -1,5 +1,5 @@
 import * as store from './store.js';
-import { load, h, menu, CATS, percent, posText, localState, readUrl, ago } from './library.js';
+import { load, h, menu, CATS, percent, posText, localState, readUrl, ago, lastDevice } from './library.js';
 import { setProgress, addHistory } from './state.js';
 import { icon } from './icons.js';
 
@@ -31,7 +31,7 @@ async function paint() {
   if (!s) { v.root.replaceChildren(h('p', { className: 'muted empty' }, 'Seri tidak ditemukan.')); return; }
   const p = data.progress[s.id];
   const cur = s.files.findIndex((f) => f.id === p?.fileId);
-  const [pos, local, all] = await Promise.all([posText(s, p), localState(s), store.getKv('fetchAll')]);
+  const [pos, local, all, who] = await Promise.all([posText(s, p), localState(s), store.getKv('fetchAll'), lastDevice(s.id, p)]);
   const has = await Promise.all(s.files.map((f) => store.hasBlob(f.id)));
   if (v !== view) return;
   const fetching = (all ?? []).includes(s.id);
@@ -43,7 +43,8 @@ async function paint() {
     h('div', { className: 'detail-info' },
       h('h1', {}, s.title),
       h('p', { className: 'muted' }, `${CATS[s.category] ?? ''} · ${s.files.length > 1 ? `${s.files.length} ${word.toLowerCase()} · ` : ''}${local}`),
-      h('p', { className: 'num' }, pos, p ? h('span', { className: 'muted' }, ` · ${ago(p.updatedAt)}`) : null),
+      h('p', { className: 'num' }, pos),
+      p ? h('p', { className: 'muted' }, `${who ? `di ${who} · ` : ''}${ago(p.updatedAt)}`) : null,
       h('div', { className: 'thin' }, h('i', { style: `width:${percent(s, p)}%` }))));
 
   const dl = !missing ? h('p', { className: 'muted' }, icon('check'), ' Semua file sudah ada di perangkat ini.')

@@ -2,6 +2,8 @@
 const P = {
   back: 'M15 18l-6-6 6-6',
   next: 'M9 18l6-6-6-6',
+  up: 'M18 15l-6-6-6 6',
+  down: 'M6 9l6 6 6-6',
   sync: 'M21 12a9 9 0 0 1-15.5 6.2L3 16M3 12a9 9 0 0 1 15.5-6.2L21 8M21 3v5h-5M3 21v-5h5',
   transfer: 'M7 3v18M3 7l4-4 4 4M17 21V3M13 17l4 4 4-4',
   plus: 'M12 5v14M5 12h14',
@@ -29,6 +31,7 @@ export function icon(name, label = null) {
   if (label) { svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', label); } else svg.setAttribute('aria-hidden', 'true');
   const path = document.createElementNS(ns, 'path');
   path.setAttribute('d', P[name]);
+  if (name === 'more') path.setAttribute('stroke-width', '3.5'); // titik harus tebal supaya terlihat
   svg.append(path);
   return svg;
 }
