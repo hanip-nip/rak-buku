@@ -376,6 +376,13 @@ test('file lama di folder lain dipindah ke folder seri sekali saja', async () =>
   assert.ok(!log.some((l) => l.startsWith('parentsOf') || l.startsWith('move')));
 });
 
+test('kategori baru (Manhwa) menjadi folder kategori di Drive', async () => {
+  st.own.series[0].category = 'manhwa';
+  st.outbox.set('j1', { id: 'j1', type: 'upload', seriesId: 's1', fileId: 'f1' });
+  assert.equal(await createSync(deps).run(), 'ok');
+  assert.ok(log.includes('startUpload:F/Manhwa/S'), log.join(' '));
+});
+
 test('file yang sudah di folder seri tidak dipindah', async () => {
   st.own.series[0].files = [file('f1', { driveId: 'D1' })];
   assert.equal(await createSync(deps).run(), 'ok');

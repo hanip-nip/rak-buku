@@ -1,5 +1,11 @@
 import { naturalCompare } from './natsort.js';
 
+// Kategori rak; label juga dipakai sebagai nama folder di Drive (Rak Buku/<label>/<judul seri>). Urutan = urutan tab.
+export const CATS = {
+  manhwa: 'Manhwa', manga: 'Manga', manhua: 'Manhua', komik: 'Komik',
+  lnovel: 'Light Novel', novel: 'Novel', lain: 'Buku lain',
+};
+
 export const newDeviceState = (id, name) => ({ device: { id, name }, series: [], progress: {}, bookmarks: [] });
 
 const upsertById = (list, rec) => (list.some((x) => x.id === rec.id)

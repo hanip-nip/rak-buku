@@ -1,12 +1,12 @@
 import * as store from './store.js';
 import { icon } from './icons.js';
 import { openPdf, pageSizes, outlinePages, makeCover } from './pdf.js';
-import { upsertSeries, addFiles, reorderFiles } from './state.js';
+import { upsertSeries, addFiles, reorderFiles, CATS } from './state.js';
 import { mergeStates } from './merge.js';
 import { naturalCompare } from './natsort.js';
 import * as auth from './auth.js';
 
-export const CATS = { komik: 'Komik', novel: 'Novel', lain: 'Buku lain' };
+export { CATS };
 const ui = { tab: 'semua', q: '' };
 let els = null; // {list, tabs, sync, foot}; null kalau rak belum pernah tampil
 let syncSt = null; // detail event 'rak:sync' terakhir
@@ -160,7 +160,9 @@ async function refresh() {
   const top = last && !q ? await hero(last, view) : null;
   const bytes = await store.blobBytes();
   if (my !== seq) return;
-  els.tabs.replaceChildren(...['semua', ...Object.keys(CATS)].map((k) =>
+  const used = new Set(view.series.map((s) => s.category)); // tab hanya untuk kategori yang punya buku
+  if (ui.tab !== 'semua' && !used.has(ui.tab)) ui.tab = 'semua';
+  els.tabs.replaceChildren(...['semua', ...Object.keys(CATS).filter((k) => used.has(k))].map((k) =>
     h('button', { className: k === ui.tab ? 'tab on' : 'tab', onclick: () => { ui.tab = k; refresh(); } },
       k === 'semua' ? 'Semua' : CATS[k])));
   const empty = view.series.length ? 'Tidak ada yang cocok.' : 'Rak masih kosong. Tekan + untuk menambah PDF.';

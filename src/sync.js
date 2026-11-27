@@ -1,9 +1,8 @@
 import { mergeStates } from './merge.js';
-import { setDriveId } from './state.js';
+import { setDriveId, CATS } from './state.js';
 import { filesToFetch } from './prefetch.js';
 
 const RANGE = 8 * 1024 * 1024;
-const CAT_FOLDER = { komik: 'Komik', novel: 'Novel', lain: 'Buku lain' }; // Drive: Rak Buku/<Kategori>/<Judul seri>/
 const FAIL_WAIT = 30 * 60_000; // prefetch yang gagal dilewati selama ini
 const FAIL_WAIT_ACTIVE = 60_000; // seri yang sedang dibuka: dicoba lagi lebih cepat
 const OWN_EVERY = 1000; // di tengah upload panjang, status sendiri yang berubah ditulis ulang paling cepat tiap 1 dtk
@@ -72,7 +71,7 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
     const me = await store.deviceId();
     // Folder seri di Drive; folder yang terhapus (404) dilupakan lalu dibuat ulang sekali.
     const seriesFolder = async (series) => {
-      const cat = CAT_FOLDER[series.category] ?? 'Buku lain';
+      const cat = CATS[series.category] ?? CATS.lain; // Drive: Rak Buku/<Kategori>/<Judul seri>/
       const title = (series.title || 'Tanpa judul').trim().slice(0, 200);
       const get = async () => {
         const c = await api((t) => drive.ensureChild(t, folder, cat));
