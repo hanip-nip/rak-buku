@@ -3,6 +3,6 @@ main = "worker.js"
 compatibility_date = "2026-11-01"
 
 [vars]
-APP_URL = "https://USERNAME.github.io/rak-buku/"
+APP_URL = "https://hanip-nip.github.io/rak-buku/"
 
 # Secrets (wrangler secret put): GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SEAL_KEY
