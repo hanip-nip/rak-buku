@@ -4,11 +4,11 @@ import { filesToFetch } from './prefetch.js';
 
 const RANGE = 8 * 1024 * 1024;
 const FAIL_WAIT = 30 * 60_000; // prefetch yang gagal dilewati selama ini
-const OWN_EVERY = 30_000; // tulis ulang status sendiri di tengah upload panjang
+const OWN_EVERY = 1000; // di tengah upload panjang, status sendiri yang berubah ditulis ulang paling cepat tiap 1 dtk
 let active = null; // seri yang sedang dibuka di pembaca
 export const setActiveSeries = (id) => { active = id; };
 export const activeSeries = () => active;
-// Saat membaca, rak:changed (tiap simpan posisi) tidak memicu sync; interval 30 dtk dan 'hidden' yang menanganinya.
+// Saat membaca, rak:changed (tiap simpan posisi) tidak memicu sync; interval 1 dtk dan 'hidden' yang menanganinya.
 export const syncOnChange = () => active === null;
 
 const emit = (type, detail) => {
@@ -22,6 +22,7 @@ class Stopped extends Error {}
 
 export function createSync({ drive, store, auth, pdf, now = Date.now, online = () => navigator.onLine }) {
   let running = false, again = false, stopped = false, timer = 0;
+  let ownSent = null, mergedKey = null; // isi terakhir yang ditulis ke Drive / dipancarkan, supaya sync tiap detik tidak menulis ulang
   const status = (state, detail = {}) => emit('rak:sync', { state, detail });
 
   async function run() {
@@ -45,7 +46,6 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
   async function body() {
     if (!online()) throw new Stopped();
     if (!(await auth.isLoggedIn())) { status('login'); return 'offline'; }
-    status('syncing');
     let token = await auth.getToken(now());
     // 401 → token baru lalu ulangi sekali; 401 kedua = perlu login ulang.
     const api = async (fn) => {
@@ -90,6 +90,8 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
     const writeOwn = async () => {
       lastOwn = now();
       const own = await store.getOwn();
+      const text = JSON.stringify(own);
+      if (text === ownSent && ownId) return own;
       const name = `status-${me}.json`;
       try {
         ownId = await inFolder((t, f) => drive.writeJson(t, f, name, own, ownId));
@@ -98,12 +100,17 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
         ownId = await inFolder((t, f) => drive.writeJson(t, f, name, own));
       }
       await store.setKv('ownStatusId', ownId);
+      ownSent = text;
       return own;
     };
     const own = await writeOwn();
     const merged = mergeStates([own, ...Object.values(remote).map((r) => r.state)], me);
-    await store.saveMerged(merged);
-    emit('rak:refresh');
+    const key = JSON.stringify(merged);
+    if (key !== mergedKey) {
+      mergedKey = key;
+      await store.saveMerged(merged);
+      emit('rak:refresh');
+    }
 
     // 3. Antrean, berurutan.
     const jobs = await store.outboxAll();
@@ -117,8 +124,8 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
         }
         await store.outboxDelete(job.id);
       } else if (job.type === 'upload') {
-        status('syncing', { done, total });
-        if (await upload(job, { inFolder, api, writeOwn, due: () => now() - lastOwn >= OWN_EVERY, remote })) await writeOwn();
+        const prog = (fileId, sent, size) => status('syncing', { kind: 'up', fileId, sent, size, done, total });
+        if (await upload(job, { inFolder, api, writeOwn, due: () => now() - lastOwn >= OWN_EVERY, remote, prog })) await writeOwn();
         done++;
       }
     }
@@ -132,7 +139,7 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
   }
 
   // true kalau selesai ter-upload.
-  async function upload(job, { inFolder, api, writeOwn, due, remote }) {
+  async function upload(job, { inFolder, api, writeOwn, due, remote, prog }) {
     const blob = await store.getBlob(job.fileId);
     if (!blob) { await store.outboxDelete(job.id); return false; } // sudah dihapus dari perangkat
     let r = null;
@@ -151,7 +158,8 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
     }
     while (!r.done) {
       if (stopped || !online()) throw new Stopped(); // job tetap di antrean
-      if (due()) await writeOwn(); // progres baca tidak menunggu upload multi-GB
+      if (due()) await writeOwn(); // progres baca tidak menunggu upload multi-GB (tidak ditulis kalau tidak berubah)
+      prog(job.fileId, r.next, blob.size);
       r = await drive.uploadChunk(job.sessionUrl, blob, r.next);
     }
     const driveId = r.driveId;
@@ -166,25 +174,31 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
   }
 
   async function prefetch(merged, api) {
-    // R18: seri yang dibuka di pembaca; kalau tidak ada, seri progres terbaru HANYA kalau perangkat ini sudah punya >= 1 file-nya.
+    // Seri yang dibuka di pembaca dulu, lalu seri yang pernah dibuka di perangkat ini ('wanted', supaya download jalan terus
+    // walau pembaca ditutup), lalu (R18) seri progres terbaru HANYA kalau perangkat ini sudah punya >= 1 file-nya.
+    if (!pdf) return;
     const newest = Object.entries(merged.progress).sort((a, b) => b[1].updatedAt - a[1].updatedAt)[0]?.[0];
-    const s = merged.series.find((x) => x.id === (active ?? newest));
-    if (!s || !pdf) return;
-    const local = new Set();
-    for (const f of s.files) if (await store.hasBlob(f.id)) local.add(f.id);
-    if (active == null && !local.size) return;
-    for (const id of filesToFetch(s, merged.progress[s.id], (x) => local.has(x))) {
-      const f = s.files.find((x) => x.id === id);
-      if (!f.driveId || !f.size) continue;
-      const failKey = `prefetchFail:${id}`;
-      if (now() - ((await store.getKv(failKey)) ?? -Infinity) < FAIL_WAIT) continue;
-      try {
-        await fetchFile(f, api);
-      } catch (e) {
-        // Gangguan jaringan/login/berhenti: tidak ditandai gagal; dilempar supaya status run benar (bukan 'ok').
-        if (e instanceof Stopped || e instanceof TypeError || e?.name === 'ReloginError' || !online()) throw e;
-        console.error('Prefetch gagal', f.name, e);
-        await store.setKv(failKey, now());
+    const wanted = (await store.getKv('wanted')) ?? [];
+    const ids = [...new Set([active, ...wanted, newest].filter(Boolean))];
+    for (const sid of ids) {
+      const s = merged.series.find((x) => x.id === sid);
+      if (!s) continue;
+      const local = new Set();
+      for (const f of s.files) if (await store.hasBlob(f.id)) local.add(f.id);
+      if (sid !== active && !wanted.includes(sid) && !local.size) continue;
+      for (const id of filesToFetch(s, merged.progress[s.id], (x) => local.has(x))) {
+        const f = s.files.find((x) => x.id === id);
+        if (!f.driveId || !f.size) continue;
+        const failKey = `prefetchFail:${id}`;
+        if (now() - ((await store.getKv(failKey)) ?? -Infinity) < FAIL_WAIT) continue;
+        try {
+          await fetchFile(f, api);
+        } catch (e) {
+          // Gangguan jaringan/login/berhenti: tidak ditandai gagal; dilempar supaya status run benar (bukan 'ok').
+          if (e instanceof Stopped || e instanceof TypeError || e?.name === 'ReloginError' || !online()) throw e;
+          console.error('Prefetch gagal', f.name, e);
+          await store.setKv(failKey, now());
+        }
       }
     }
   }
@@ -193,7 +207,7 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
     const parts = [];
     for (let a = 0; a < f.size;) {
       if (stopped || !online()) throw new Stopped();
-      status('syncing', { fileId: f.id, got: a, size: f.size }); // progres download untuk pembaca dan rak
+      status('syncing', { kind: 'down', fileId: f.id, got: a, size: f.size }); // progres download untuk pembaca dan rak
       const b = Math.min(a + RANGE, f.size) - 1;
       const part = await api((t) => drive.downloadRange(t, f.driveId, a, b));
       if (!part.size) throw new Error('rentang kosong');

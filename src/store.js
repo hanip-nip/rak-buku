@@ -47,7 +47,8 @@ const deviceName = () => {
   const ua = navigator.userAgent;
   if (/iPhone|iPad|iPod/.test(ua)) return 'iPhone';
   if (/Android/.test(ua)) return 'Android';
-  return 'PC';
+  const b = navigator.brave ? 'Brave' : /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : '';
+  return b ? `PC ${b}` : 'PC';
 };
 
 let idp;
@@ -80,6 +81,11 @@ export const updateOwn = (fn) => retry(async () => {
   });
 });
 export const getKv = (k) => get('kv', k);
+// Seri yang dibuka di perangkat ini: sync terus men-download file berikutnya walau pembaca sudah ditutup.
+export async function setWanted(id, on) {
+  const w = ((await getKv('wanted')) ?? []).filter((x) => x !== id);
+  await put('kv', on ? [id, ...w].slice(0, 20) : w, 'wanted');
+}
 export const setKv = (k, v) => put('kv', v, k);
 export const getMerged = () => get('kv', 'merged');
 export const saveMerged = (m) => put('kv', m, 'merged');

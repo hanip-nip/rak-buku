@@ -70,3 +70,17 @@ test('upsertSeries membawa tombstone file lama', async () => {
   assert.ok(A.series[0].files.some((q) => q.id === 'x' && q.deleted));
   assert.deepEqual(mergeStates([A, C], 'A').series[0].files.map((q) => q.id), ['y']);
 });
+
+test('addHistory: geser sedikit memperbarui entri terakhir, lompat jauh menambah entri baru, maksimal 10', async () => {
+  const { addHistory } = await import('../src/state.js');
+  let own = newDeviceState('d1', 'PC');
+  own = addHistory(own, 's1', { fileId: 'a', page: 1, offset: 0 }, 1);
+  own = addHistory(own, 's1', { fileId: 'a', page: 3, offset: 0.5 }, 2);
+  assert.deepEqual(own.history.s1, [{ fileId: 'a', page: 3, offset: 0.5, at: 2 }]);
+  own = addHistory(own, 's1', { fileId: 'a', page: 100, offset: 0 }, 3);
+  own = addHistory(own, 's1', { fileId: 'b', page: 1, offset: 0 }, 4);
+  assert.deepEqual(own.history.s1.map((e) => [e.fileId, e.page, e.at]), [['b', 1, 4], ['a', 100, 3], ['a', 3, 2]]);
+  for (let i = 0; i < 20; i++) own = addHistory(own, 's1', { fileId: 'c', page: i * 10 + 1, offset: 0 }, 10 + i);
+  assert.equal(own.history.s1.length, 10);
+  assert.equal(own.history.s1[0].page, 191);
+});

@@ -47,3 +47,13 @@ export const setProgress = (own, seriesId, pos, now) => ({
 
 export const upsertBookmark = (own, bm, now) =>
   ({ ...own, bookmarks: upsertById(own.bookmarks, { ...bm, updatedAt: now }) });
+
+// Riwayat posisi baca per seri (terbaru dulu), dikirim ke Drive bersama status perangkat ini.
+// Selisih < 3 halaman di file yang sama = masih sesi baca yang sama -> entri terakhir diperbarui; lompat jauh = entri baru.
+export const addHistory = (own, seriesId, pos, now, keep = 10) => {
+  const list = own.history?.[seriesId] ?? [];
+  const entry = { fileId: pos.fileId, page: pos.page, offset: pos.offset, at: now };
+  const same = list[0] && list[0].fileId === pos.fileId && Math.abs(list[0].page - pos.page) < 3;
+  const next = [entry, ...(same ? list.slice(1) : list)].slice(0, keep);
+  return { ...own, history: { ...own.history, [seriesId]: next } };
+};

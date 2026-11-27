@@ -1,14 +1,16 @@
 import * as store from './store.js';
 import * as library from './library.js';
 import * as reader from './reader.js';
+import * as transfers from './transfers.js';
 import * as auth from './auth.js';
 import * as drive from './drive.js';
 import * as pdf from './pdf.js';
-import { createSync, activeSeries, syncOnChange } from './sync.js';
+import { createSync, syncOnChange } from './sync.js';
 
 const sync = createSync({ drive, store, auth, pdf });
 
 const app = () => document.getElementById('app');
+let pauseUntil = 0;
 
 async function takeAuthHash() {
   const { error } = await auth.takeAuthFromHash().catch(() => ({}));
@@ -21,7 +23,11 @@ async function takeAuthHash() {
 
 function route() {
   const m = /^#\/baca\/(.+)$/.exec(location.hash);
-  if (m) {
+  transfers.hide();
+  if (location.hash === '#/transfer') {
+    reader.close();
+    transfers.show();
+  } else if (m) {
     let id;
     try { id = decodeURIComponent(m[1]); } catch { id = m[1]; }
     reader.open(id);
@@ -41,10 +47,16 @@ async function boot() {
   // Pemicu sync. 'rak:refresh' sengaja tidak memicu, supaya tidak berputar.
   window.addEventListener('rak:changed', () => { if (syncOnChange()) sync.schedule(); });
   window.addEventListener('online', () => sync.run());
-  window.addEventListener('rak:need', () => sync.run()); // pembaca butuh file yang belum ada di perangkat
+  window.addEventListener('rak:need', () => { pauseUntil = 0; sync.run(); }); // pembaca butuh file / tombol sinkron
   window.addEventListener('pagehide', sync.stop);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') sync.run(); });
-  setInterval(() => { if (activeSeries()) sync.run(); }, 30_000);
+  // Sync tiap 1 dtk selama aplikasi terlihat (cukup 1 permintaan daftar status kalau tidak ada yang berubah); juga saat disembunyikan/ditampilkan.
+  document.addEventListener('visibilitychange', () => sync.run());
+  // Gagal -> jeda 30 dtk, supaya error Drive tidak diulang tiap detik.
+  setInterval(async () => {
+    if (document.visibilityState !== 'visible' || !navigator.onLine || Date.now() < pauseUntil) return;
+    const r = await sync.run();
+    if (r === 'error' || r === 'relogin') pauseUntil = Date.now() + 30_000;
+  }, 1000);
   sync.run();
 }
 boot();

@@ -234,18 +234,47 @@ test('upload tidak dihapus → tidak di-trash', async () => {
   assert.ok(!log.some((l) => l.startsWith('trash')));
 });
 
-test('status sendiri ditulis ulang di tengah upload panjang setelah ≥ 30 detik', async () => {
+test('di tengah upload, status sendiri ditulis ulang ≥ 1 detik kemudian hanya kalau berubah', async () => {
   st.outbox.set('j1', { id: 'j1', type: 'upload', seriesId: 's1', fileId: 'f1' });
   let t = 0, k = 0;
   drv.uploadChunk = async (u, b, start) => {
-    log.push(`uploadChunk:${start}`); t += 20_000; k++;
+    log.push(`uploadChunk:${start}`); t += 2000; k++;
+    if (k === 2) st.own.progress.s1 = { fileId: 'f1', page: 100, offset: 0, updatedAt: t }; // posisi baca berubah saat upload
     return k < 3 ? { done: false, next: k } : { done: true, driveId: 'D1' };
   };
   assert.equal(await createSync({ ...deps, now: () => t }).run(), 'ok');
   const W = `writeJson:status-${ME}.json`;
   const seq = log.filter((l) => l === W || l.startsWith('uploadChunk'));
-  // tulis awal, chunk 0 (t=20 dtk), chunk 1 (t=40 dtk), tulis ulang, chunk 2, tulis setelah selesai
+  // tulis awal, chunk 0 (tak berubah → tidak tulis), chunk 1 (posisi berubah), tulis, chunk 2, tulis setelah selesai (driveId)
   assert.deepEqual(seq, [W, 'uploadChunk:0', 'uploadChunk:1', W, 'uploadChunk:2', W]);
+});
+
+test('sync berulang tanpa perubahan: status tidak ditulis ulang dan rak:refresh tidak dipancarkan lagi', async () => {
+  const events = [];
+  globalThis.dispatchEvent = (e) => { events.push(e.type); return true; };
+  const sync = createSync(deps);
+  try {
+    assert.equal(await sync.run(), 'ok');
+    assert.equal(await sync.run(), 'ok');
+    st.own.progress.s1 = { fileId: 'f1', page: 5, offset: 0, updatedAt: 2 };
+    assert.equal(await sync.run(), 'ok');
+  } finally { delete globalThis.dispatchEvent; }
+  assert.equal(log.filter((l) => l === `writeJson:status-${ME}.json`).length, 2);
+  assert.equal(events.filter((e) => e === 'rak:refresh').length, 2);
+});
+
+test('upload memancarkan progres per chunk di rak:sync', async () => {
+  st.outbox.set('j1', { id: 'j1', type: 'upload', seriesId: 's1', fileId: 'f1' });
+  let k = 0;
+  drv.uploadChunk = async () => (++k < 2 ? { done: false, next: 10 } : { done: true, driveId: 'D1' });
+  const events = [];
+  globalThis.dispatchEvent = (e) => { events.push(e); return true; };
+  try { assert.equal(await createSync(deps).run(), 'ok'); } finally { delete globalThis.dispatchEvent; }
+  const prog = events.filter((e) => e.type === 'rak:sync' && e.detail.detail.kind === 'up').map((e) => e.detail.detail);
+  assert.deepEqual(prog, [
+    { kind: 'up', fileId: 'f1', sent: 0, size: 20, done: 0, total: 1 },
+    { kind: 'up', fileId: 'f1', sent: 10, size: 20, done: 0, total: 1 },
+  ]);
 });
 
 test("rak:changed saat seri terbuka di pembaca tidak menjadwalkan sync", () => {
@@ -273,6 +302,16 @@ test('R18: tanpa seri aktif, seri progres terbaru yang sudah punya file lokal di
   drv.downloadRange = async () => new Blob([new Uint8Array(20)]);
   assert.equal(await createSync({ ...deps, pdf: pdfOk }).run(), 'ok');
   assert.ok(st.blobs.has('f2'));
+});
+
+test('seri yang pernah dibuka di perangkat ini (wanted) tetap di-download setelah pembaca ditutup', async () => {
+  st.own.series[0].files = [file('f1', { driveId: 'D1' })];
+  st.own.progress = { s1: { fileId: 'f1', page: 1, offset: 0, updatedAt: 5 } };
+  st.blobs.clear();
+  st.kv.wanted = ['s1'];
+  drv.downloadRange = async () => new Blob([new Uint8Array(20)]);
+  assert.equal(await createSync({ ...deps, pdf: pdfOk }).run(), 'ok');
+  assert.ok(st.blobs.has('f1'));
 });
 
 test('prefetch: offline di tengah download → run offline, lastSync tidak maju, tidak ditandai gagal', async () => {
@@ -306,6 +345,6 @@ test('prefetch memancarkan progres download di rak:sync', async () => {
   try {
     assert.equal(await createSync({ ...deps, pdf: pdfOk }).run(), 'ok');
   } finally { delete globalThis.dispatchEvent; }
-  const prog = events.filter((e) => e.type === 'rak:sync' && e.detail.detail.fileId).map((e) => e.detail.detail);
-  assert.deepEqual(prog, [{ fileId: 'f1', got: 0, size: M + 5 }, { fileId: 'f1', got: M, size: M + 5 }]);
+  const prog = events.filter((e) => e.type === 'rak:sync' && e.detail.detail.kind === 'down').map((e) => e.detail.detail);
+  assert.deepEqual(prog, [{ kind: 'down', fileId: 'f1', got: 0, size: M + 5 }, { kind: 'down', fileId: 'f1', got: M, size: M + 5 }]);
 });

@@ -92,3 +92,36 @@ export function night(s) {
     h('label', { className: 'toggle' }, inv, 'Balik warna halaman'), h('button', { onclick: () => close() }, 'Tutup'));
   return close;
 }
+
+const ago = (t) => {
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 1) return 'baru saja';
+  if (m < 60) return `${m} menit lalu`;
+  const j = Math.round(m / 60);
+  return j < 24 ? `${j} jam lalu` : new Date(t).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+};
+
+// Riwayat halaman dari semua perangkat (posisi terakhir + lompatan sebelumnya), terbaru dulu.
+export function history(s, api) {
+  const list = h('div', { className: 'bm-list' }, h('p', { className: 'muted' }, 'Memuat…'));
+  const order = (id) => s.all.findIndex((f) => f.id === id);
+  const local = new Set(s.run.map((f) => f.id));
+  api.devices().then((devs) => {
+    const rows = devs.flatMap(({ me, state }) => {
+      const name = me ? `${state.device.name} ini` : state.device.name;
+      const hist = state.history?.[s.seriesId] ?? [];
+      const last = state.progress?.[s.seriesId];
+      const all = hist.length ? hist : last ? [{ ...last, at: last.updatedAt }] : [];
+      return all.filter((e) => order(e.fileId) >= 0).map((e) => ({ ...e, name }));
+    }).sort((a, b) => b.at - a.at).slice(0, 30);
+    list.replaceChildren(...(rows.length ? rows.map((e) => {
+      const ok = local.has(e.fileId);
+      const label = `${s.multi ? `${s.word} ${order(e.fileId) + 1} · ` : ''}hal ${e.page}`;
+      return h('button', { className: 'item', disabled: !ok, onclick: () => { close(); api.jump(e); } },
+        label, h('small', {}, `${e.name} · ${ago(e.at)}${ok ? '' : ` · ${MISSING}`}`));
+    }) : [h('p', { className: 'muted' }, 'Belum ada riwayat.')]));
+  }).catch((e) => { console.error('Gagal memuat riwayat', e); list.replaceChildren(h('p', { className: 'muted' }, 'Gagal memuat riwayat.')); });
+  const close = sheet('Riwayat baca', h('p', { className: 'muted' }, 'Posisi dari semua perangkat yang login dengan akun yang sama.'), list,
+    h('button', { onclick: () => close() }, 'Tutup'));
+  return close;
+}

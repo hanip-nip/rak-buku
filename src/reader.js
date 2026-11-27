@@ -1,8 +1,8 @@
 import * as store from './store.js';
 import { openPdf, renderPage } from './pdf.js';
-import { setProgress } from './state.js';
+import { setProgress, addHistory } from './state.js';
 import { buildLayout, positionAt, scrollTopFor, visibleRange, windowRun } from './layout.js';
-import { load, h } from './library.js';
+import { load, h, devices } from './library.js';
 import * as panels from './reader-panels.js';
 import { setActiveSeries } from './sync.js';
 
@@ -51,7 +51,7 @@ function refreshMiss() {
 }
 window.addEventListener('rak:sync', (e) => {
   const { state, detail } = e.detail ?? {};
-  dl = state === 'syncing' && detail?.fileId ? detail : null;
+  dl = state === 'syncing' && detail?.kind === 'down' ? detail : null;
   refreshMiss();
 });
 for (const ev of ['online', 'offline']) window.addEventListener(ev, refreshMiss);
@@ -59,6 +59,7 @@ for (const ev of ['online', 'offline']) window.addEventListener(ev, refreshMiss)
 export async function open(seriesId) {
   close();
   setActiveSeries(wanted = seriesId);
+  store.setWanted(seriesId, true).catch((e) => console.error('Gagal menandai seri', e));
   const my = ++gen;
   app().replaceChildren(h('p', { className: 'muted reader-msg' }, 'Memuat…'));
   await store.deviceId(); // supaya updateOwn saat pagehide tidak menunggu IDB untuk deviceId
@@ -91,19 +92,20 @@ export async function open(seriesId) {
   const posEl = h('span', { className: 'rpos' });
   const spacer = h('div', { className: 'rpages' });
   const acts = {
-    toc: () => panel(ses, panels.toc), bookmark: () => panel(ses, panels.bookmarks),
+    toc: () => panel(ses, panels.toc), bookmark: () => panel(ses, panels.bookmarks), history: () => panel(ses, panels.history),
     night: () => panel(ses, panels.night), zoom: () => { if (ses.zoom !== 1) setZoom(ses, 1); },
   };
   const topMiss = h('p', { className: 'rmissing' }), botMiss = h('p', { className: 'rmissing' });
-  const root = h('div', { className: `reader${invert ? ' invert' : ''}` }, topMiss, spacer, botMiss,
+  const toast = h('div', { className: 'rtoast', role: 'status', hidden: true });
+  const root = h('div', { className: `reader${invert ? ' invert' : ''}` }, topMiss, spacer, botMiss, toast,
     h('header', { className: 'rbar rtop' },
       h('button', { 'aria-label': 'Kembali', onclick: back }, '←'),
       h('div', { className: 'rtitle' }, h('strong', {}, s.title), posEl)),
-    h('nav', { className: 'rbar rbottom' }, ...[['toc', 'Daftar isi'], ['bookmark', 'Bookmark'], ['night', 'Malam'], ['zoom', 'Zoom']]
+    h('nav', { className: 'rbar rbottom' }, ...[['toc', 'Daftar isi'], ['bookmark', 'Bookmark'], ['history', 'Riwayat'], ['night', 'Malam'], ['zoom', 'Zoom']]
       .map(([k, t]) => h('button', { 'data-act': k, onclick: acts[k] }, t))));
   const ses = r = {
     seriesId, word, run: run.files, runLo: run.lo, lo: run.lo, files: [], topMiss, botMiss, all: s.files, multi: s.files.length > 1, root, spacer, posEl, zoom: 1,
-    zoomBtn: root.querySelector('[data-act="zoom"]'), panel: null,
+    zoomBtn: root.querySelector('[data-act="zoom"]'), panel: null, toast, savedAt: progress?.updatedAt ?? 0,
     slots: new Map(), docs: new Map(), L: null, W: 0, y0: 0, last: '', timer: 0, raf: 0, busy: false, lastScroll: 0, offs: [],
   };
   setWindow(ses, pick(ses, at));
@@ -232,13 +234,36 @@ function layoutPages(s) {
 // Panel (bottom sheet) menempel di body; satu yang terbuka per sesi.
 function panel(s, fn) {
   s.panel?.();
-  const jump = (pos) => {
-    const i = idxOf(s, pos);
-    if (i < s.lo || i >= s.lo + s.files.length) reflow(s, pick(s, i), pos); // lokal tapi di luar jendela
-    else window.scrollTo(window.scrollX, s.y0 + scrollTopFor(s.L, pos));
-  };
-  s.panel = fn(s, { here: () => currentPos(s), jump });
+  s.panel = fn(s, { here: () => currentPos(s), jump: (pos) => jumpTo(s, pos), devices });
 }
+
+// Lompat ke posisi; file lokal di luar jendela -> layout ulang. false kalau file belum ada di perangkat ini.
+function jumpTo(s, pos) {
+  const i = idxOf(s, pos);
+  if (!s.run.some((f) => f.id === pos.fileId)) return false;
+  if (i < s.lo || i >= s.lo + s.files.length) reflow(s, pick(s, i), pos);
+  else window.scrollTo(window.scrollX, s.y0 + scrollTopFor(s.L, pos));
+  return true;
+}
+
+const where = (s, p) => `${s.multi ? `${s.word} ${s.all.findIndex((f) => f.id === p.fileId) + 1} · ` : ''}hal ${p.page}`;
+
+// Posisi dari perangkat lain yang lebih baru dari tulisan kita sendiri: tawarkan lompat, jangan pindah diam-diam.
+window.addEventListener('rak:refresh', async () => {
+  const s = r;
+  if (!s) return;
+  const p = (await load()).progress[s.seriesId];
+  if (s !== r || !p || p.updatedAt <= s.savedAt) return;
+  const cur = currentPos(s);
+  if (cur && cur.fileId === p.fileId && Math.abs(cur.page - p.page) < 3) { s.savedAt = p.updatedAt; return; }
+  const hide = () => { s.toast.hidden = true; s.savedAt = Math.max(s.savedAt, p.updatedAt); };
+  const local = s.run.some((f) => f.id === p.fileId);
+  s.toast.replaceChildren(
+    h('span', {}, `Perangkat lain sampai ${where(s, p)}${local ? '' : ' (belum ada di perangkat ini)'}`),
+    local ? h('button', { className: 'primary', onclick: () => { hide(); jumpTo(s, p); } }, 'Lompat') : null,
+    h('button', { onclick: hide }, 'Abaikan'));
+  s.toast.hidden = false;
+});
 
 // Bangun ulang layout di zoom z lalu pulihkan pos; dengan `at` = {cx, mx, my}, pos adalah posisi di titik tengah cubitan (tetap di bawah jari).
 function setZoom(s, z, pos = currentPos(s), at = null) {
@@ -289,7 +314,8 @@ async function persist(s, pos) {
     localStorage.setItem(BACKUP + s.seriesId, raw);
   } catch { /* storage diblokir; IDB tetap dicoba */ }
   try {
-    await store.updateOwn((own) => setProgress(own, s.seriesId, pos, now));
+    await store.updateOwn((own) => addHistory(setProgress(own, s.seriesId, pos, now), s.seriesId, pos, now));
+    s.savedAt = Math.max(s.savedAt, now);
     dropBackup(s.seriesId, raw);
     window.dispatchEvent(new CustomEvent('rak:changed'));
   } catch (e) {

@@ -45,6 +45,13 @@ export const guessTitle = (name) => {
   return s || bare;
 };
 
+// Status mentah tiap perangkat (milik sendiri dulu), untuk riwayat baca lintas perangkat.
+export async function devices() {
+  const me = await store.deviceId();
+  const remote = Object.values(await store.getRemote()).map((x) => x.state);
+  return [{ me: true, state: await store.getOwn() }, ...remote.filter((st) => st.device.id !== me).map((state) => ({ me: false, state }))];
+}
+
 export async function load() {
   const own = await store.getOwn();
   const remote = Object.values(await store.getRemote());
@@ -133,13 +140,15 @@ async function syncLine() {
   if (state === 'offline') return els.sync.replaceChildren('Offline — perubahan disimpan di HP');
   if (state === 'error') return els.sync.replaceChildren('Sinkron gagal, dicoba lagi nanti');
   if (state === 'syncing') {
-    const what = detail.fileId && detail.size ? ` (men-download ${Math.floor((detail.got / detail.size) * 100)}%)`
-      : detail.total ? ` (mengunggah ${detail.done + 1}/${detail.total})` : '';
-    return els.sync.replaceChildren(`Menyinkronkan…${what}`);
+    const pct = (a, b) => `${Math.floor((a / (b || 1)) * 100)}%`;
+    const what = detail.kind === 'down' ? `Men-download ${pct(detail.got, detail.size)}`
+      : detail.kind === 'up' ? `Mengunggah ${detail.done + 1}/${detail.total} · ${pct(detail.sent, detail.size)}` : 'Menyinkronkan…';
+    return els.sync.replaceChildren(what);
   }
   const my = syncSt;
   const at = await store.getKv('lastSync').catch(() => null);
-  if (my === syncSt) els.sync.replaceChildren(at ? `Tersinkron ${Math.max(0, Math.round((Date.now() - at) / 60000))} menit lalu` : '');
+  const m = at ? Math.round((Date.now() - at) / 60000) : -1;
+  if (my === syncSt) els.sync.replaceChildren(m < 0 ? '' : m < 1 ? 'Tersinkron' : `Tersinkron ${m} menit lalu`);
 }
 
 export function show() {
@@ -155,7 +164,12 @@ export function show() {
   });
   els = { tabs: h('nav', { className: 'tabs' }), list: h('section', { className: 'list' }), sync: h('p', { className: 'muted' }), foot: h('footer', { className: 'muted' }) };
   document.getElementById('app').replaceChildren(
-    h('header', { className: 'top' }, h('h1', {}, 'Rak Buku'), input), els.tabs, els.list, els.sync, els.foot, picker,
+    h('header', { className: 'top' },
+      h('div', { className: 'bar' }, h('h1', {}, 'Rak Buku'),
+        h('a', { className: 'icon-btn', href: '#/transfer', 'aria-label': 'Transfer: upload dan download', title: 'Transfer' }, '⇅'),
+        h('button', { className: 'icon-btn', 'aria-label': 'Sinkronkan sekarang', title: 'Sinkronkan sekarang',
+          onclick: () => window.dispatchEvent(new CustomEvent('rak:need')) }, '⟳')),
+      input), els.tabs, els.list, els.sync, els.foot, picker,
     h('button', { className: 'fab', 'aria-label': 'Tambah PDF', onclick: () => picker.click() }, '+'));
   refresh();
   syncLine();
@@ -248,7 +262,7 @@ function menu(s) {
     h('button', { disabled: s.files.length < 2, onclick: () => { close(); orderDialog(s.id); } }, 'Atur urutan file'),
     h('button', {
       disabled: blocked,
-      onclick: async () => { close(); for (const f of s.files) await store.deleteBlob(f.id); changed(); },
+      onclick: async () => { close(); await store.setWanted(s.id, false); for (const f of s.files) await store.deleteBlob(f.id); changed(); },
     }, 'Hapus dari perangkat'),
     blocked ? h('p', { className: 'muted' }, 'Ada file yang belum ter-upload ke Drive; kalau dihapus dari perangkat, datanya hilang.') : null,
     h('button', { className: 'danger', onclick: () => delSeries(s, close) }, 'Hapus seri'),
