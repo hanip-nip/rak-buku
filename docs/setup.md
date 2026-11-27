@@ -4,7 +4,7 @@ Panduan ini untuk kamu yang memakai Windows dan iPhone. Semua akun di bawah grat
 
 Kamu akan memakai tiga layanan: Google Cloud (izin akses ke Drive), Cloudflare (server kecil untuk login) dan GitHub (tempat aplikasi di-host).
 
-## Bagian 1: login Google dan prototipe di iPhone
+## Bagian 1: menyiapkan login Google
 
 ### 1. Proyek Google Cloud
 
@@ -39,8 +39,6 @@ Langkah ke-4 penting. Selama berstatus Testing, Google membuat refresh token ked
 2. Buat repositori baru bernama `rak-buku`. Pilih Public, karena Pages gratis untuk repositori publik. Biarkan kosong: jangan centang README atau opsi tambahan lain.
 3. Minta Claude untuk mengirim (push) proyek ke repositori ini. Claude akan meminta izin dulu. Folder `.superpowers/` dan `contoh/` diabaikan git, jadi tidak ikut publik. Folder `worker/` dan `docs/` tidak berisi rahasia, karena secret disimpan di Cloudflare, bukan di file.
 4. Setelah proyek terkirim, di repositori buka Settings, lalu Pages. Pada Source pilih "Deploy from a branch", branch `main`, folder `/ (root)`, lalu Save. Setelah satu-dua menit, alamatnya muncul, yaitu `https://<username-github>.github.io/rak-buku/`.
-
-Folder `spike/` ikut terkirim, dan bisa dibuka di `https://<username-github>.github.io/rak-buku/spike/`.
 
 ### 5. Akun Cloudflare dan deploy Worker
 
@@ -84,30 +82,9 @@ $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create
 
 Simpan kunci ini di tempat aman. Kalau kunci diganti, semua perangkat harus login ulang.
 
-### 7. Coba prototipe di iPhone
+### 7. Coba login
 
-Sebelum mengetes, buka `spike/index.html` dan ganti `WORKER_URL` di bagian atas script dengan alamat Worker-mu. Minta Claude mengirim perubahan ini ke GitHub. Pastikan juga `APP_URL` di `wrangler.toml` mengarah ke halaman spike (`.../rak-buku/spike/`) selama tes ini, lalu jalankan `npx.cmd wrangler deploy` lagi. Setelah tes selesai, kembalikan ke alamat aplikasi.
-
-Tujuan tes: memastikan login Google bisa selesai di aplikasi layar utama iPhone, bukan terlempar ke tab Safari.
-
-1. Di iPhone, buka alamat spike di Safari.
-2. Ketuk tombol Share, lalu Add to Home Screen.
-3. Tutup Safari. Buka aplikasi dari ikon di layar utama.
-4. Cek tulisan "Mode standalone". Harus "ya". Kalau "tidak", kamu masih di Safari, jadi ulangi langkah 3.
-5. Ketuk Login Google, pilih akun, lalu setujui izinnya.
-6. Kamu akan kembali ke halaman spike. Yang diharapkan: kembali ke aplikasi layar utama, bukan ke tab Safari, dan status berubah jadi "sudah login".
-7. Ketuk Ambil token. Harus muncul "Token didapat, berlaku ... detik".
-8. Pilih satu file PDF, lalu ketuk Upload ke Drive. Harus muncul id file. Cek di drive.google.com bahwa file itu ada.
-9. Tutup aplikasi sepenuhnya (geser ke atas dari app switcher), buka lagi dari ikon, pilih PDF, lalu upload lagi tanpa menekan Login.
-
-Lulus kalau semuanya ini benar:
-
-- setelah login, aplikasi layar utama (bukan tab Safari) menerima hasil login,
-- Ambil token berhasil,
-- PDF muncul di Drive,
-- setelah aplikasi ditutup dan dibuka lagi, upload kedua berhasil tanpa login ulang.
-
-Yang perlu kamu laporkan: lulus atau gagal. Kalau gagal, di langkah mana, dan apa tulisan yang muncul di layar (pesan error di kotak abu-abu). Sebutkan juga versi iOS-mu.
+Buka alamat aplikasi di browser, ketuk Masuk, pilih akun Google, lalu setujui izinnya. Kamu harus kembali ke aplikasi dalam keadaan sudah login. Uji di iPhone ada di bagian 13.
 
 ## Bagian 2: memasang dan memakai aplikasi
 
@@ -116,7 +93,7 @@ Yang perlu kamu laporkan: lulus atau gagal. Kalau gagal, di langkah mana, dan ap
 Aplikasi belum bisa login kalau dua hal ini belum diisi:
 
 1. Di `src/config.js`, isi `WORKER_URL` dengan alamat Worker-mu (`https://rak-buku-auth.<subdomain>.workers.dev`).
-2. Di `worker\wrangler.toml`, `APP_URL` harus mengarah ke aplikasi yang asli (`https://<username-github>.github.io/rak-buku/`), bukan ke halaman spike. Setelah diubah, jalankan `npx.cmd wrangler deploy` lagi dari folder `worker`.
+2. Di `worker\wrangler.toml`, `APP_URL` harus mengarah ke aplikasi yang asli (`https://<username-github>.github.io/rak-buku/`). Setelah diubah, jalankan `npx.cmd wrangler deploy` lagi dari folder `worker`.
 
 Kamu bisa minta Claude yang mengedit dan mengirimnya ke GitHub. Claude akan meminta izin dulu sebelum push.
 
