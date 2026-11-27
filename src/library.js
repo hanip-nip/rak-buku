@@ -1,11 +1,12 @@
 import * as store from './store.js';
+import { icon } from './icons.js';
 import { openPdf, pageSizes, outlinePages, makeCover } from './pdf.js';
 import { upsertSeries, addFiles, reorderFiles } from './state.js';
 import { mergeStates } from './merge.js';
 import { naturalCompare } from './natsort.js';
 import * as auth from './auth.js';
 
-const CATS = { komik: 'Komik', novel: 'Novel', lain: 'Buku lain' };
+export const CATS = { komik: 'Komik', novel: 'Novel', lain: 'Buku lain' };
 const ui = { tab: 'semua', q: '' };
 let els = null; // {list, tabs, sync, foot}; null kalau rak belum pernah tampil
 let syncSt = null; // detail event 'rak:sync' terakhir
@@ -66,7 +67,7 @@ async function mutate(fn, quiet) {
 const fresh = async (id) => (await load()).series.find((x) => x.id === id);
 const save = (series, quiet) => { const now = Date.now(); return mutate((own) => upsertSeries(own, series, now), quiet); };
 
-function percent(s, p) {
+export function percent(s, p) {
   const i = s.files.findIndex((f) => f.id === p?.fileId);
   if (i < 0) return 0;
   const done = s.files.slice(0, i).reduce((n, f) => n + f.pages, 0) + p.page;
@@ -74,7 +75,7 @@ function percent(s, p) {
   return Math.min(100, Math.round((done / total) * 100));
 }
 
-async function posText(s, p) {
+export async function posText(s, p) {
   const i = s.files.findIndex((f) => f.id === p?.fileId);
   if (i < 0) return 'Belum dibaca';
   if (s.files.length > 1) {
@@ -86,28 +87,57 @@ async function posText(s, p) {
   return `${ch ? `${ch.title} · ` : ''}hal ${p.page}/${s.files[0].pages}`;
 }
 
-async function localState(s) {
+export async function localState(s) {
   const has = await Promise.all(s.files.map((f) => store.hasBlob(f.id)));
   const n = has.filter(Boolean).length;
   if (!has.length) return 'Belum ada file';
   return n === has.length ? 'Ada di HP' : n === 0 ? 'Hanya di Drive' : 'Sebagian di HP';
 }
 
+const seriesUrl = (s) => `#/seri/${encodeURIComponent(s.id)}`;
+export const readUrl = (s) => `#/baca/${encodeURIComponent(s.id)}`;
+
+function coverEl(s, cls = 'cover') {
+  return h('div', { className: cls }, s.cover ? h('img', { src: s.cover, alt: '' }) : h('span', { className: 'cover-blank' }, s.title.slice(0, 1)));
+}
+
+// Sel rak: sampul + progres tipis + judul + posisi. Ketuk = halaman seri.
 async function card(s, view) {
   const p = view.progress[s.id];
-  const [pos, local] = await Promise.all([posText(s, p), localState(s)]);
-  const open = () => { location.hash = `#/baca/${encodeURIComponent(s.id)}`; };
-  return h('article', { className: 'card' },
-    h('div', { className: 'cover', onclick: open }, s.cover ? h('img', { src: s.cover, alt: '' }) : null),
-    h('div', { className: 'info' },
-      h('h3', { onclick: open }, s.title),
-      h('p', { className: 'muted' }, `${CATS[s.category] ?? ''} · ${local}`),
-      h('p', {}, pos),
-      h('div', { className: 'bar' }, h('i', { style: `width:${percent(s, p)}%` })),
-      h('div', { className: 'row' },
-        h('button', { className: 'primary', onclick: open }, 'Lanjut baca'),
-        h('button', { 'aria-label': 'Menu', onclick: () => menu(s) }, '⋯'))));
+  const pos = await posText(s, p);
+  const pct = percent(s, p);
+  return h('a', { className: 'shelf-item', href: seriesUrl(s) },
+    coverEl(s),
+    h('div', { className: 'thin', role: 'progressbar', 'aria-valuenow': pct, 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-label': `${pct}% dibaca` },
+      h('i', { style: `width:${pct}%` })),
+    h('strong', {}, s.title),
+    h('small', {}, pos));
 }
+
+// Kartu Lanjut baca: seri dengan progres terbaru.
+async function hero(s, view) {
+  const p = view.progress[s.id];
+  const [pos, local] = await Promise.all([posText(s, p), localState(s)]);
+  const when = p ? ago(p.updatedAt) : '';
+  return h('section', { className: 'hero', 'aria-label': 'Lanjut baca' },
+    h('a', { href: seriesUrl(s), className: 'hero-cover', 'aria-label': `Halaman seri ${s.title}` }, coverEl(s)),
+    h('div', { className: 'hero-info' },
+      h('span', { className: 'hero-cat' }, `${CATS[s.category] ?? ''} · ${local}`),
+      h('h2', {}, s.title),
+      h('p', { className: 'num' }, pos),
+      when ? h('p', { className: 'muted' }, `Terakhir dibaca ${when}`) : null,
+      h('div', { className: 'thin' }, h('i', { style: `width:${percent(s, p)}%` })),
+      h('a', { className: 'btn primary', href: readUrl(s) }, icon('book'), 'Lanjut baca')));
+}
+
+export const ago = (t) => {
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 1) return 'baru saja';
+  if (m < 60) return `${m} menit lalu`;
+  const j = Math.round(m / 60);
+  if (j < 24) return `${j} jam lalu`;
+  return new Date(t).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+};
 
 async function refresh() {
   if (!els || !document.contains(els.list)) return;
@@ -119,13 +149,21 @@ async function refresh() {
     .filter((s) => (ui.tab === 'semua' || s.category === ui.tab) && s.title.toLowerCase().includes(q))
     .sort((a, b) => rank(b) - rank(a) || naturalCompare(a.title, b.title));
   const cards = await Promise.all(shown.map((s) => card(s, view)));
+  const last = view.series.filter((s) => view.progress[s.id]).sort((a, b) => rank(b) - rank(a))[0];
+  const top = last && !q ? await hero(last, view) : null;
   const bytes = await store.blobBytes();
   if (my !== seq) return;
   els.tabs.replaceChildren(...['semua', ...Object.keys(CATS)].map((k) =>
     h('button', { className: k === ui.tab ? 'tab on' : 'tab', onclick: () => { ui.tab = k; refresh(); } },
       k === 'semua' ? 'Semua' : CATS[k])));
   const empty = view.series.length ? 'Tidak ada yang cocok.' : 'Rak masih kosong. Tekan + untuk menambah PDF.';
-  els.list.replaceChildren(...(cards.length ? cards : [h('p', { className: 'muted' }, empty)]));
+  els.hero.replaceChildren(...(top ? [top] : []));
+  const first = !view.series.length;
+  els.list.replaceChildren(...(cards.length ? cards : [first
+    ? h('div', { className: 'empty-state' }, h('h2', {}, 'Rak masih kosong'),
+      h('p', { className: 'muted' }, 'Tambahkan PDF komik atau novel dari perangkat ini. Kalau sudah pernah menambah buku di perangkat lain, masuk Google supaya rak tersinkron.'),
+      h('button', { className: 'primary', onclick: () => els.picker.click() }, icon('plus'), 'Tambah PDF'))
+    : h('p', { className: 'muted empty' }, empty)]));
   els.foot.textContent = `Ruang terpakai di HP: ${(bytes / 1048576).toFixed(1)} MB`;
 }
 for (const ev of ['rak:changed', 'rak:refresh', 'rak:file-ready']) window.addEventListener(ev, refresh);
@@ -134,6 +172,7 @@ window.addEventListener('rak:sync', (e) => { syncSt = e.detail; syncLine(); });
 async function syncLine() {
   if (!els) return;
   const { state, detail = {} } = syncSt ?? {};
+  els.syncBtn?.classList.toggle('spin', state === 'syncing');
   const masuk = h('button', { onclick: () => auth.login() }, 'Masuk');
   if (state === 'login') return els.sync.replaceChildren('Belum masuk Google · ', masuk);
   if (state === 'relogin') return els.sync.replaceChildren('Login ulang diperlukan · ', masuk);
@@ -162,15 +201,20 @@ export function show() {
     picker.value = '';
     if (f.length) addDialog(f);
   });
-  els = { tabs: h('nav', { className: 'tabs' }), list: h('section', { className: 'list' }), sync: h('p', { className: 'muted' }), foot: h('footer', { className: 'muted' }) };
-  document.getElementById('app').replaceChildren(
+  els = { hero: h('div'), tabs: h('nav', { className: 'tabs', 'aria-label': 'Kategori' }), list: h('section', { className: 'shelf', 'aria-label': 'Rak' }),
+    sync: h('p', { className: 'muted status', role: 'status' }), foot: h('footer', { className: 'muted' }) };
+  const syncBtn = h('button', { className: 'icon-btn', 'aria-label': 'Sinkronkan sekarang', title: 'Sinkronkan sekarang',
+    onclick: () => window.dispatchEvent(new CustomEvent('rak:need')) }, icon('sync'));
+  els.syncBtn = syncBtn;
+  els.picker = picker;
+  document.getElementById('app').replaceChildren(h('div', { className: 'page' },
     h('header', { className: 'top' },
-      h('div', { className: 'bar' }, h('h1', {}, 'Rak Buku'),
-        h('a', { className: 'icon-btn', href: '#/transfer', 'aria-label': 'Transfer: upload dan download', title: 'Transfer' }, '⇅'),
-        h('button', { className: 'icon-btn', 'aria-label': 'Sinkronkan sekarang', title: 'Sinkronkan sekarang',
-          onclick: () => window.dispatchEvent(new CustomEvent('rak:need')) }, '⟳')),
-      input), els.tabs, els.list, els.sync, els.foot, picker,
-    h('button', { className: 'fab', 'aria-label': 'Tambah PDF', onclick: () => picker.click() }, '+'));
+      h('h1', {}, 'Rak Buku'),
+      h('a', { className: 'icon-btn', href: '#/transfer', 'aria-label': 'Transfer: upload dan download', title: 'Transfer' }, icon('transfer')),
+      syncBtn),
+    h('label', { className: 'search' }, icon('search'), input),
+    els.hero, els.tabs, els.list, els.sync, els.foot), picker,
+    h('button', { className: 'fab', 'aria-label': 'Tambah PDF', onclick: () => picker.click() }, icon('plus')));
   refresh();
   syncLine();
 }
@@ -255,14 +299,14 @@ async function addDialog(files) {
   });
 }
 
-function menu(s) {
+export function menu(s) {
   const blocked = s.files.some((f) => f.driveId === null);
   const close = sheet(s.title,
     h('button', { onclick: () => { close(); editDialog(s); } }, 'Ubah judul / kategori'),
     h('button', { disabled: s.files.length < 2, onclick: () => { close(); orderDialog(s.id); } }, 'Atur urutan file'),
     h('button', {
       disabled: blocked,
-      onclick: async () => { close(); await store.setWanted(s.id, false); for (const f of s.files) await store.deleteBlob(f.id); changed(); },
+      onclick: async () => { close(); await store.setWanted(s.id, false); await store.setFetchAll(s.id, false); for (const f of s.files) await store.deleteBlob(f.id); changed(); },
     }, 'Hapus dari perangkat'),
     blocked ? h('p', { className: 'muted' }, 'Ada file yang belum ter-upload ke Drive; kalau dihapus dari perangkat, datanya hilang.') : null,
     h('button', { className: 'danger', onclick: () => delSeries(s, close) }, 'Hapus seri'),

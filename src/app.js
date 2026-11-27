@@ -2,6 +2,7 @@ import * as store from './store.js';
 import * as library from './library.js';
 import * as reader from './reader.js';
 import * as transfers from './transfers.js';
+import * as series from './series.js';
 import * as auth from './auth.js';
 import * as drive from './drive.js';
 import * as pdf from './pdf.js';
@@ -24,7 +25,14 @@ async function takeAuthHash() {
 function route() {
   const m = /^#\/baca\/(.+)$/.exec(location.hash);
   transfers.hide();
-  if (location.hash === '#/transfer') {
+  series.hide();
+  const sm = /^#\/seri\/(.+)$/.exec(location.hash);
+  if (sm) {
+    reader.close();
+    let id;
+    try { id = decodeURIComponent(sm[1]); } catch { id = sm[1]; }
+    series.show(id);
+  } else if (location.hash === '#/transfer') {
     reader.close();
     transfers.show();
   } else if (m) {

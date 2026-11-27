@@ -82,6 +82,10 @@ export const updateOwn = (fn) => retry(async () => {
 });
 export const getKv = (k) => get('kv', k);
 // Seri yang dibuka di perangkat ini: sync terus men-download file berikutnya walau pembaca sudah ditutup.
+export async function setFetchAll(id, on) {
+  const w = ((await getKv('fetchAll')) ?? []).filter((x) => x !== id);
+  await put('kv', on ? [id, ...w] : w, 'fetchAll');
+}
 export async function setWanted(id, on) {
   const w = ((await getKv('wanted')) ?? []).filter((x) => x !== id);
   await put('kv', on ? [id, ...w].slice(0, 20) : w, 'wanted');

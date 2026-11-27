@@ -4,11 +4,17 @@ import { setProgress, addHistory } from './state.js';
 import { buildLayout, positionAt, scrollTopFor, visibleRange, windowRun } from './layout.js';
 import { load, h, devices } from './library.js';
 import * as panels from './reader-panels.js';
+import { icon } from './icons.js';
 import { setActiveSeries } from './sync.js';
 
 const GAP = 8;
 const MAX_LIVE_PX = 48e6; // R9: batas total piksel kanvas hidup
 const MAX_LAYOUT_PX = 30e6; // R19: WebKit/Chrome menjepit layout sekitar 33,5 juta px
+// Lebar halaman: 'fit' = pas layar (maks 900 px), 'wide' = lebar (maks 1400 px). Kecepatan auto-scroll dalam px/dtk.
+export const SPEEDS = { lambat: 40, normal: 90, cepat: 180, kilat: 360 };
+const prefs = { width: 'fit', speed: 'normal' };
+store.getKv('readPrefs').then((p) => Object.assign(prefs, p ?? {})).catch(() => {});
+const baseW = () => Math.min(window.innerWidth, prefs.width === 'wide' ? 1400 : 900);
 let r = null; // sesi pembaca aktif
 let gen = 0;
 let wanted = null; // seri yang diminta dibuka (juga saat hanya pesan "belum ada di perangkat" yang tampil)
@@ -101,21 +107,24 @@ export async function open(seriesId) {
 
   const posEl = h('span', { className: 'rpos' });
   const spacer = h('div', { className: 'rpages' });
-  const acts = {
-    toc: () => panel(ses, panels.toc), bookmark: () => panel(ses, panels.bookmarks), history: () => panel(ses, panels.history),
-    night: () => panel(ses, panels.night), zoom: () => { if (ses.zoom !== 1) setZoom(ses, 1); },
-  };
+  const ib = (name, label, onclick) => h('button', { className: 'icon-btn', 'aria-label': label, title: label, onclick }, icon(name));
+  const chapBtn = h('button', { className: 'rchap', onclick: () => panel(ses, panels.toc) }, icon('list'), h('span', {}, 'Daftar isi'));
+  const prevBtn = h('button', { className: 'rstep', 'aria-label': 'Sebelumnya', onclick: () => step(ses, -1) }, icon('back'), h('span', {}, 'Sebelumnya'));
+  const nextBtn = h('button', { className: 'rstep', 'aria-label': 'Selanjutnya', onclick: () => step(ses, 1) }, h('span', {}, 'Selanjutnya'), icon('next'));
+  const autoBtn = h('button', { className: 'icon-btn rauto', 'aria-label': 'Auto-scroll', title: 'Auto-scroll', 'aria-pressed': 'false', onclick: () => autoScroll(ses) }, icon('play'));
   const topMiss = h('p', { className: 'rmissing' }), botMiss = h('p', { className: 'rmissing' });
   const toast = h('div', { className: 'rtoast', role: 'status', hidden: true });
   const root = h('div', { className: `reader${invert ? ' invert' : ''}` }, topMiss, spacer, botMiss, toast,
     h('header', { className: 'rbar rtop' },
-      h('button', { 'aria-label': 'Kembali', onclick: back }, '←'),
-      h('div', { className: 'rtitle' }, h('strong', {}, s.title), posEl)),
-    h('nav', { className: 'rbar rbottom' }, ...[['toc', 'Daftar isi'], ['bookmark', 'Bookmark'], ['history', 'Riwayat'], ['night', 'Malam'], ['zoom', 'Zoom']]
-      .map(([k, t]) => h('button', { 'data-act': k, onclick: acts[k] }, t))));
+      ib('back', 'Kembali ke rak', back),
+      h('div', { className: 'rtitle' }, h('strong', {}, s.title), posEl),
+      ib('bookmark', 'Bookmark', () => panel(ses, panels.bookmarks)),
+      ib('history', 'Riwayat baca', () => panel(ses, panels.history)),
+      ib('settings', 'Pengaturan baca', () => panel(ses, panels.settings))),
+    h('nav', { className: 'rbar rbottom' }, prevBtn, chapBtn, autoBtn, nextBtn));
   const ses = r = {
     seriesId, word, run: run.files, runLo: run.lo, lo: run.lo, files: [], topMiss, botMiss, all: s.files, multi: s.files.length > 1, root, spacer, posEl, zoom: 1,
-    zoomBtn: root.querySelector('[data-act="zoom"]'), panel: null, toast, savedAt: progress?.updatedAt ?? 0,
+    chapBtn, prevBtn, nextBtn, autoBtn, auto: null, panel: null, toast, savedAt: progress?.updatedAt ?? 0,
     slots: new Map(), docs: new Map(), L: null, W: 0, y0: 0, last: '', timer: 0, raf: 0, busy: false, lastScroll: 0, offs: [],
   };
   setWindow(ses, pick(ses, at));
@@ -138,6 +147,7 @@ export function close() {
   const pos = currentPos(s);
   r = null;
   s.panel?.();
+  stopAuto(s);
   for (const off of s.offs) off();
   clearTimeout(s.timer);
   cancelAnimationFrame(s.raf);
@@ -193,7 +203,7 @@ const idxOf = (s, pos) => (pos ? s.all.findIndex((f) => f.id === pos.fileId) : s
 
 // R19: jendela berpusat di `center`; kalau hasilnya tidak memuat `need` (jendela menyusut), pusatkan di `need`.
 function pick(s, center, need = center) {
-  const W = Math.min(window.innerWidth, 900) * s.zoom;
+  const W = baseW() * s.zoom;
   const hOf = (f) => f.sizes.reduce((n, z) => n + (z.h / z.w) * W + GAP, 0);
   const w = (c) => windowRun(s.run, s.runLo, s.runLo + s.run.length, c, hOf, MAX_LAYOUT_PX);
   const win = w(center);
@@ -232,7 +242,7 @@ function shiftWindow(s, y) {
 }
 
 function layoutPages(s) {
-  s.W = Math.min(window.innerWidth, 900) * s.zoom;
+  s.W = baseW() * s.zoom;
   const pages = s.files.flatMap((f) => f.sizes.map((z, k) => ({ fileId: f.id, page: k + 1, height: (z.h / z.w) * s.W })));
   s.L = buildLayout(pages, GAP);
   s.spacer.style.width = `${s.W}px`;
@@ -244,7 +254,75 @@ function layoutPages(s) {
 // Panel (bottom sheet) menempel di body; satu yang terbuka per sesi.
 function panel(s, fn) {
   s.panel?.();
-  s.panel = fn(s, { here: () => currentPos(s), jump: (pos) => jumpTo(s, pos), devices });
+  stopAuto(s);
+  s.panel = fn(s, {
+    here: () => currentPos(s), jump: (pos) => jumpTo(s, pos), devices, prefs,
+    setPrefs: (p) => {
+      const width = prefs.width;
+      Object.assign(prefs, p);
+      store.setKv('readPrefs', { ...prefs }).catch((e) => console.error('Gagal menyimpan pengaturan', e));
+      if (prefs.width !== width && s === r) reflow(s, pick(s, idxOf(s, currentPos(s))));
+    },
+    resetZoom: () => { if (s.zoom !== 1) setZoom(s, 1); },
+  });
+}
+
+// Chapter = entri daftar isi tiap file lokal; file tanpa daftar isi dihitung satu chapter (batch).
+function chapters(s) {
+  return s.run.flatMap((f) => {
+    const n = s.all.findIndex((x) => x.id === f.id) + 1;
+    const marks = f.outline.length ? f.outline.map((o) => ({ fileId: f.id, page: o.page, title: o.title })) : [];
+    if (!marks.length || marks[0].page > 1) marks.unshift({ fileId: f.id, page: 1, title: s.multi ? `${s.word} ${n}` : 'Awal' });
+    return marks.map((m) => ({ ...m, offset: 0, k: [n, m.page] }));
+  });
+}
+const before = (a, b) => a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]);
+
+// Chapter tempat posisi berada, dan sebelum/sesudahnya. "Sebelumnya" kembali ke awal chapter ini dulu kalau sudah lewat 2 halaman.
+function around(s, p = currentPos(s)) {
+  const list = chapters(s);
+  if (!p || !list.length) return { list, i: -1 };
+  const k = [s.all.findIndex((x) => x.id === p.fileId) + 1, p.page];
+  let i = -1;
+  for (let j = 0; j < list.length; j++) if (!before(k, list[j].k)) i = j;
+  return { list, i, k };
+}
+
+function step(s, dir) {
+  const { list, i, k } = around(s);
+  if (!list.length) return;
+  let t;
+  if (dir > 0) t = list[i + 1];
+  else if (i >= 0 && k[1] - list[i].k[1] >= 2 && k[0] === list[i].k[0]) t = list[i];
+  else t = list[i - 1] ?? list[0];
+  if (t) jumpTo(s, t);
+}
+
+function stopAuto(s) {
+  if (!s.auto) return;
+  cancelAnimationFrame(s.auto.raf);
+  s.auto = null;
+  s.autoBtn.replaceChildren(icon('play'));
+  s.autoBtn.setAttribute('aria-pressed', 'false');
+}
+
+// Auto-scroll: gulir halus dengan kecepatan dari pengaturan; berhenti saat layar disentuh, panel dibuka, atau sampai akhir.
+function autoScroll(s) {
+  if (s.auto) return stopAuto(s);
+  s.root.classList.remove('bars');
+  s.autoBtn.replaceChildren(icon('pause'));
+  s.autoBtn.setAttribute('aria-pressed', 'true');
+  let last = performance.now(), carry = 0;
+  const tick = (t) => {
+    if (s !== r || !s.auto) return;
+    carry += (SPEEDS[prefs.speed] ?? SPEEDS.normal) * Math.min(100, t - last) / 1000;
+    last = t;
+    const dy = Math.floor(carry);
+    if (dy) { carry -= dy; window.scrollBy(0, dy); }
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) return stopAuto(s);
+    s.auto.raf = requestAnimationFrame(tick);
+  };
+  s.auto = { raf: requestAnimationFrame(tick) };
 }
 
 // Lompat ke posisi; file lokal di luar jendela -> layout ulang. false kalau file belum ada di perangkat ini.
@@ -284,7 +362,6 @@ function setZoom(s, z, pos = currentPos(s), at = null) {
   layoutPages(s);
   const left = s.spacer.getBoundingClientRect().left + window.scrollX;
   window.scrollTo(at ? left + at.cx * k - at.mx : 0, s.y0 + (pos ? scrollTopFor(s.L, pos) : 0) - (at ? at.my : 0));
-  s.zoomBtn.textContent = z === 1 ? 'Zoom' : `Zoom ${Math.round(z * 100)}%`;
   update(s);
 }
 
@@ -345,7 +422,7 @@ function listen(s) {
     s.timer = setTimeout(() => saveNow(s), 1000);
   }, { passive: true });
   on(window, 'resize', () => {
-    if (Math.min(window.innerWidth, 900) * s.zoom === s.W) return;
+    if (baseW() * s.zoom === s.W) return;
     const pos = currentPos(s);
     setWindow(s, pick(s, idxOf(s, pos)));
     layoutPages(s);
@@ -362,6 +439,7 @@ function listen(s) {
   s.offs.push(() => clearTimeout(tapTimer));
   on(s.root, 'pointerdown', (e) => {
     if (e.target.closest('.rbar')) return;
+    if (s.auto) { stopAuto(s); return; }
     if (e.isPrimary) ptrs.clear();
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const now = performance.now();
@@ -438,6 +516,12 @@ function showPos(s, y) {
   const f = s.files.find((x) => x.id === p.fileId);
   const text = `${s.multi ? `${s.word} ${s.all.findIndex((x) => x.id === p.fileId) + 1} · ` : ''}hal ${p.page} dari ${f.sizes.length}`;
   if (s.posEl.textContent !== text) s.posEl.textContent = text;
+  const { list, i } = around(s, p);
+  const label = list[i]?.title ?? 'Daftar isi';
+  const span = s.chapBtn.lastChild;
+  if (span.textContent !== label) span.textContent = label;
+  s.nextBtn.disabled = !list[i + 1];
+  s.prevBtn.disabled = i <= 0 && !(i === 0 && p.page - list[0].k[1] >= 2);
 }
 
 function release(canvas) {

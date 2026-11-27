@@ -77,10 +77,23 @@ export function bookmarks(s, api) {
   return close;
 }
 
-export function night(s) {
+// Pilihan tunggal sebagai deretan tombol (radio): [[nilai, label], ...].
+function choice(label, opts, value, onpick) {
+  const btns = opts.map(([v, t]) => h('button', {
+    className: v === value ? 'seg on' : 'seg', role: 'radio', 'aria-checked': String(v === value),
+    onclick: () => {
+      for (const b of btns) { const on = b === btn(v); b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); }
+      onpick(v);
+    },
+  }, t));
+  const btn = (v) => btns[opts.findIndex(([x]) => x === v)];
+  return h('div', { className: 'field' }, h('span', { className: 'field-label' }, label), h('div', { className: 'segs', role: 'radiogroup', 'aria-label': label }, ...btns));
+}
+
+export function settings(s, api) {
   const html = document.documentElement;
   const save = (k, v) => store.setKv(k, v).catch((e) => console.error('Gagal menyimpan pengaturan', e));
-  const dark = h('input', { type: 'checkbox', checked: html.dataset.theme === 'dark', onchange: () => {
+  const dark = h('input', { type: 'checkbox', checked: html.dataset.theme !== 'light', onchange: () => {
     html.dataset.theme = dark.checked ? 'dark' : 'light';
     save('theme', html.dataset.theme);
   } });
@@ -88,8 +101,14 @@ export function night(s) {
     s.root.classList.toggle('invert', inv.checked);
     save(`invert:${s.seriesId}`, inv.checked);
   } });
-  const close = sheet('Mode malam', h('label', { className: 'toggle' }, dark, 'Tema gelap'),
-    h('label', { className: 'toggle' }, inv, 'Balik warna halaman'), h('button', { onclick: () => close() }, 'Tutup'));
+  const close = sheet('Pengaturan baca',
+    choice('Lebar halaman', [['fit', 'Pas layar'], ['wide', 'Lebar']], api.prefs.width, (v) => api.setPrefs({ width: v })),
+    choice('Kecepatan auto-scroll', [['lambat', 'Lambat'], ['normal', 'Normal'], ['cepat', 'Cepat'], ['kilat', 'Kilat']], api.prefs.speed, (v) => api.setPrefs({ speed: v })),
+    h('label', { className: 'toggle' }, dark, 'Tema gelap'),
+    h('label', { className: 'toggle' }, inv, 'Balik warna halaman (untuk PDF putih di malam hari)'),
+    h('p', { className: 'muted' }, 'Zoom: cubit dengan dua jari, ketuk dua kali untuk kembali normal.'),
+    s.zoom !== 1 ? h('button', { onclick: () => { api.resetZoom(); close(); } }, `Kembalikan zoom (${Math.round(s.zoom * 100)}%)`) : null,
+    h('button', { onclick: () => close() }, 'Tutup'));
   return close;
 }
 

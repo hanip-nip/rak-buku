@@ -1,6 +1,7 @@
 import * as store from './store.js';
 import { load, h } from './library.js';
 import { filesToFetch } from './prefetch.js';
+import { icon } from './icons.js';
 
 // Halaman Transfer: upload ke Drive dan download ke perangkat ini, dengan progres langsung dari rak:sync.
 let last = null; // detail rak:sync terakhir: {state, detail}
@@ -19,20 +20,21 @@ const mb = (n) => `${(n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0)} MB`;
 function row(title, sub, value, max) {
   return h('div', { className: 'xfer' },
     h('div', { className: 'xfer-text' }, h('strong', {}, title), h('small', {}, sub)),
-    max ? h('progress', { value, max, 'aria-label': `${title}: ${pct(value, max)}%` }) : null);
+    max ? h('div', { className: 'thin', role: 'progressbar', 'aria-valuenow': pct(value, max), 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-label': `${title}: ${pct(value, max)}%` }, h('i', { style: `width:${pct(value, max)}%` })) : null);
 }
 
 async function paint() {
   const v = view;
   if (!v) return;
-  const [merged, jobs, wanted] = await Promise.all([load(), store.outboxAll(), store.getKv('wanted')]);
+  const [merged, jobs, wanted, all] = await Promise.all([load(), store.outboxAll(), store.getKv('wanted'), store.getKv('fetchAll')]);
   const queued = [];
-  for (const sid of wanted ?? []) {
+  for (const sid of new Set([...(all ?? []), ...(wanted ?? [])])) {
     const s = merged.series.find((x) => x.id === sid);
     if (!s) continue;
     const local = new Set();
     for (const f of s.files) if (await store.hasBlob(f.id)) local.add(f.id);
-    for (const id of filesToFetch(s, merged.progress[sid], (x) => local.has(x))) queued.push(id);
+    const ids = (all ?? []).includes(sid) ? s.files.map((f) => f.id).filter((x) => !local.has(x)) : filesToFetch(s, merged.progress[sid], (x) => local.has(x));
+    for (const id of ids) if (!queued.includes(id)) queued.push(id);
   }
   if (v !== view) return;
   const names = new Map();
@@ -74,10 +76,10 @@ export function show() {
   const list = h('section', { className: 'xfer-list' });
   const now = h('p', { className: 'muted' });
   const refresh = h('button', { className: 'icon-btn', 'aria-label': 'Sinkronkan sekarang', title: 'Sinkronkan sekarang',
-    onclick: () => window.dispatchEvent(new CustomEvent('rak:need')) }, '⟳');
+    onclick: () => window.dispatchEvent(new CustomEvent('rak:need')) }, icon('sync'));
   const root = h('div', { className: 'page' },
-    h('header', { className: 'top bar' },
-      h('button', { className: 'icon-btn', 'aria-label': 'Kembali ke rak', onclick: () => { location.hash = '#/'; } }, '←'),
+    h('header', { className: 'top' },
+      h('a', { className: 'icon-btn', href: '#/', 'aria-label': 'Kembali ke rak' }, icon('back')),
       h('h1', {}, 'Transfer'), refresh),
     now, list);
   view = { root, list, now };

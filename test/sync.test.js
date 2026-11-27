@@ -346,6 +346,15 @@ test('download seri yang sedang dibuka yang gagal dicoba lagi setelah 1 menit, b
   assert.equal(n, 2);
 });
 
+test('seri bertanda download semua (fetchAll): semua batch di-download, bukan hanya 2 berikutnya', async () => {
+  st.own.series[0].files = ['f1', 'f2', 'f3', 'f4', 'f5'].map((id, i) => file(id, { driveId: 'D' + id, order: i }));
+  st.blobs.clear();
+  st.kv.fetchAll = ['s1'];
+  drv.downloadRange = async () => new Blob([new Uint8Array(20)]);
+  assert.equal(await createSync({ ...deps, pdf: pdfOk }).run(), 'ok');
+  assert.deepEqual([...st.blobs.keys()].sort(), ['f1', 'f2', 'f3', 'f4', 'f5']);
+});
+
 test('prefetch: offline di tengah download → run offline, lastSync tidak maju, tidak ditandai gagal', async () => {
   st.own.series[0].files = [file('f1', { driveId: 'D1', size: 20 * 1024 * 1024 })];
   st.blobs.clear();

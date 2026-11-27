@@ -181,14 +181,16 @@ export function createSync({ drive, store, auth, pdf, now = Date.now, online = (
     if (!pdf) return;
     const newest = Object.entries(merged.progress).sort((a, b) => b[1].updatedAt - a[1].updatedAt)[0]?.[0];
     const wanted = (await store.getKv('wanted')) ?? [];
-    const ids = [...new Set([active, ...wanted, newest].filter(Boolean))];
+    const all = (await store.getKv('fetchAll')) ?? []; // 'Download semua batch' dari halaman seri
+    const ids = [...new Set([active, ...all, ...wanted, newest].filter(Boolean))];
     for (const sid of ids) {
       const s = merged.series.find((x) => x.id === sid);
       if (!s) continue;
       const local = new Set();
       for (const f of s.files) if (await store.hasBlob(f.id)) local.add(f.id);
-      if (sid !== active && !wanted.includes(sid) && !local.size) continue;
-      for (const id of filesToFetch(s, merged.progress[s.id], (x) => local.has(x))) {
+      if (sid !== active && !wanted.includes(sid) && !all.includes(sid) && !local.size) continue;
+      const todo = all.includes(sid) ? s.files.map((f) => f.id).filter((x) => !local.has(x)) : filesToFetch(s, merged.progress[s.id], (x) => local.has(x));
+      for (const id of todo) {
         const f = s.files.find((x) => x.id === id);
         if (!f.driveId || !f.size) continue;
         const failKey = `prefetchFail:${id}`;
