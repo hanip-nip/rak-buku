@@ -51,7 +51,7 @@ Folder `spike/` ikut terkirim, dan bisa dibuka di `https://<username-github>.git
 
    ```
    cd D:\Projects\rak-buku\worker
-   npx wrangler login
+   npx.cmd wrangler login
    ```
 
    Browser akan terbuka. Klik izinkan.
@@ -59,7 +59,7 @@ Folder `spike/` ikut terkirim, dan bisa dibuka di `https://<username-github>.git
 6. Deploy:
 
    ```
-   npx wrangler deploy
+   npx.cmd wrangler deploy
    ```
 
    Hasilnya menampilkan alamat Worker, bentuknya `https://rak-buku-auth.<subdomain>.workers.dev`. Pastikan subdomain-nya sama dengan yang kamu pakai di redirect URI (langkah 3).
@@ -69,9 +69,9 @@ Folder `spike/` ikut terkirim, dan bisa dibuka di `https://<username-github>.git
 Masih di folder `worker`, jalankan tiga perintah ini satu per satu. Tiap perintah akan meminta kamu menempelkan nilainya.
 
 ```
-npx wrangler secret put GOOGLE_CLIENT_ID
-npx wrangler secret put GOOGLE_CLIENT_SECRET
-npx wrangler secret put SEAL_KEY
+npx.cmd wrangler secret put GOOGLE_CLIENT_ID
+npx.cmd wrangler secret put GOOGLE_CLIENT_SECRET
+npx.cmd wrangler secret put SEAL_KEY
 ```
 
 Untuk GOOGLE_CLIENT_ID dan GOOGLE_CLIENT_SECRET, tempel nilai dari langkah 3.
@@ -86,7 +86,7 @@ Simpan kunci ini di tempat aman. Kalau kunci diganti, semua perangkat harus logi
 
 ### 7. Coba prototipe di iPhone
 
-Sebelum mengetes, buka `spike/index.html` dan ganti `WORKER_URL` di bagian atas script dengan alamat Worker-mu. Minta Claude mengirim perubahan ini ke GitHub. Pastikan juga `APP_URL` di `wrangler.toml` mengarah ke halaman spike (`.../rak-buku/spike/`) selama tes ini, lalu jalankan `npx wrangler deploy` lagi. Setelah tes selesai, kembalikan ke alamat aplikasi.
+Sebelum mengetes, buka `spike/index.html` dan ganti `WORKER_URL` di bagian atas script dengan alamat Worker-mu. Minta Claude mengirim perubahan ini ke GitHub. Pastikan juga `APP_URL` di `wrangler.toml` mengarah ke halaman spike (`.../rak-buku/spike/`) selama tes ini, lalu jalankan `npx.cmd wrangler deploy` lagi. Setelah tes selesai, kembalikan ke alamat aplikasi.
 
 Tujuan tes: memastikan login Google bisa selesai di aplikasi layar utama iPhone, bukan terlempar ke tab Safari.
 
@@ -116,7 +116,7 @@ Yang perlu kamu laporkan: lulus atau gagal. Kalau gagal, di langkah mana, dan ap
 Aplikasi belum bisa login kalau dua hal ini belum diisi:
 
 1. Di `src/config.js`, isi `WORKER_URL` dengan alamat Worker-mu (`https://rak-buku-auth.<subdomain>.workers.dev`).
-2. Di `worker\wrangler.toml`, `APP_URL` harus mengarah ke aplikasi yang asli (`https://<username-github>.github.io/rak-buku/`), bukan ke halaman spike. Setelah diubah, jalankan `npx wrangler deploy` lagi dari folder `worker`.
+2. Di `worker\wrangler.toml`, `APP_URL` harus mengarah ke aplikasi yang asli (`https://<username-github>.github.io/rak-buku/`), bukan ke halaman spike. Setelah diubah, jalankan `npx.cmd wrangler deploy` lagi dari folder `worker`.
 
 Kamu bisa minta Claude yang mengedit dan mengirimnya ke GitHub. Claude akan meminta izin dulu sebelum push.
 
